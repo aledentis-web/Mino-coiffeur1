@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { getAvailableSlots, getEffectiveDuration } from "../lib/booking-engine";
@@ -142,6 +143,20 @@ export function SiteBooking() {
             Scegli il servizio e trova il momento giusto. Senza attese,
             messaggi persi o telefonate a vuoto.
           </p>
+
+          <figure className="hero-media">
+            <Image
+              alt="Barbiere mentre rifinisce un taglio con forbici e pettine"
+              fill
+              priority
+              sizes="(max-width: 980px) 100vw, 50vw"
+              src="/images/barber-cut-editorial.webp"
+            />
+            <figcaption>
+              <span>Studio 01</span>
+              <strong>Precisione, senza fretta.</strong>
+            </figcaption>
+          </figure>
 
           <div className="entrance-strip" id="come-funziona">
             <span><CalendarIcon /> Sito</span>
@@ -340,6 +355,53 @@ export function SiteBooking() {
         </div>
       </section>
 
+      <section className="craft-story" aria-labelledby="craft-title">
+        <div className="craft-copy">
+          <span className="section-index">Il nostro modo</span>
+          <h2 id="craft-title">
+            Cura nei dettagli.
+            <br />
+            <em>Semplicità nel resto.</em>
+          </h2>
+          <p>
+            Un servizio preciso merita un’esperienza altrettanto precisa:
+            scegli, prenota e arriva al momento giusto.
+          </p>
+          <div className="craft-principles">
+            <span><i>01</i> Tempo rispettato</span>
+            <span><i>02</i> Durata su misura</span>
+            <span><i>03</i> Un’unica agenda</span>
+          </div>
+          <small>Visual concept per il business test Studio Barber 8.</small>
+        </div>
+
+        <figure className="craft-photo razor-photo">
+          <Image
+            alt="Dettaglio della rifinitura della barba con rasoio"
+            fill
+            sizes="(max-width: 680px) 88vw, 28vw"
+            src="/images/barber-razor-detail.webp"
+          />
+          <figcaption>
+            <span>Barba</span>
+            <strong>Contorni netti</strong>
+          </figcaption>
+        </figure>
+
+        <figure className="craft-photo studio-photo">
+          <Image
+            alt="Poltrona e postazione di un moderno barber shop"
+            fill
+            sizes="(max-width: 680px) 88vw, 28vw"
+            src="/images/barber-studio-chair.webp"
+          />
+          <figcaption>
+            <span>Lo spazio</span>
+            <strong>Pronto per te</strong>
+          </figcaption>
+        </figure>
+      </section>
+
       <footer className="public-footer">
         <div>
           <HeadsetIcon />
@@ -353,4 +415,3 @@ export function SiteBooking() {
     </main>
   );
 }
-

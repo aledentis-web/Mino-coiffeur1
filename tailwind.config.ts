@@ -5,11 +5,11 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#11100e",
-        warm: "#f4efe6",
-        linen: "#fbf8f2",
-        stonegold: "#b28a46",
-        espresso: "#3d3329"
+        ink: "#111713",
+        warm: "#f3f1e9",
+        linen: "#fffef9",
+        stonegold: "#9fca06",
+        espresso: "#28332c"
       },
       boxShadow: {
         soft: "0 24px 70px rgba(17, 16, 14, 0.12)"

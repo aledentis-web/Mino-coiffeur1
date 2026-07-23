@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import { BookingProvider } from "./components/booking-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Mino Coiffeur — Demo prenotazioni",
-  description: "Demo navigabile per simulare richieste di prenotazione da Mino Coiffeur."
+  title: "Studio Barber 8 — Business Test",
+  description:
+    "Agenda elettronica e segretario digitale multicanale per barber shop."
 };
 
 export default function RootLayout({
@@ -13,7 +15,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="it">
-      <body>{children}</body>
+      <body>
+        <BookingProvider>{children}</BookingProvider>
+      </body>
     </html>
   );
 }

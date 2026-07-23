@@ -1,12 +1,14 @@
 {
-  "name": "mino-coiffeur-demo",
-  "version": "0.1.0",
+  "name": "studio-barber-8",
+  "version": "0.2.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test app/lib/booking-engine.test.ts"
   },
   "dependencies": {
     "next": "^16.2.4",

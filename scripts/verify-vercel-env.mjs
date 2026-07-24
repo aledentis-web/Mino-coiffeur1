@@ -5,8 +5,12 @@ if (!process.env.VERCEL) {
   process.exit(0);
 }
 
-const required = ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SECRET_KEY"];
-const missing = required.filter((key) => !process.env[key]);
+const required = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "SUPABASE_SECRET_KEY",
+  "STUDIO_BARBER_ADMIN_PASSWORD"
+];
+const missing = required.filter((key) => !process.env[key]?.trim());
 
 if (missing.length > 0) {
   throw new Error(`Missing Vercel environment variables: ${missing.join(", ")}`);

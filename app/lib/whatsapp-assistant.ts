@@ -48,6 +48,11 @@ type AssistantInput = {
   now?: Date;
 };
 
+export type WhatsAppAssistantResult = {
+  response: string;
+  duplicate: boolean;
+};
+
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_VISIBLE_SLOTS = 12;
 
@@ -132,7 +137,10 @@ async function saveConversation({
   );
 
   if (error) throw new Error(`WHATSAPP_CONVERSATION_SAVE_FAILED:${error.code}`);
-  return response;
+  return {
+    response,
+    duplicate: false
+  } satisfies WhatsAppAssistantResult;
 }
 
 async function getServices(
@@ -262,7 +270,10 @@ export async function handleWhatsAppAssistantMessage({
     previous?.last_message_sid === messageSid &&
     previous.last_response_text
   ) {
-    return previous.last_response_text;
+    return {
+      response: previous.last_response_text,
+      duplicate: true
+    } satisfies WhatsAppAssistantResult;
   }
 
   const normalizedBody = normalizeWhatsAppText(body);

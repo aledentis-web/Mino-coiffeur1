@@ -26,6 +26,8 @@ STUDIO_BARBER_RESOURCE_SLUG=main
 
 `SUPABASE_SECRET_KEY` deve contenere una chiave moderna `sb_secret_...`, deve esistere soltanto negli ambienti server e non deve mai essere commessa nella repository.
 
+Durante ogni build Vercel viene eseguito un controllo server-to-server che verifica le variabili obbligatorie e la connessione al tenant configurato.
+
 ## Verifica
 
 ```bash

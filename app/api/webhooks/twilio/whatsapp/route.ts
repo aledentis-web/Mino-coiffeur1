@@ -1,7 +1,7 @@
 import { after, NextResponse } from "next/server";
 import twilio from "twilio";
 import {
-  getTwilioWebhookUrl,
+  getTwilioWebhookUrls,
   isValidTwilioFormRequest,
   parseIncomingWhatsAppMessage
 } from "../../../../lib/twilio-webhook";
@@ -174,16 +174,18 @@ export async function POST(request: Request) {
 
   const signature = request.headers.get("x-twilio-signature") ?? "";
   const params = new URLSearchParams(await request.text());
-  const webhookUrl = getTwilioWebhookUrl(request);
+  const webhookUrls = getTwilioWebhookUrls(request);
 
   if (
     !signature ||
-    !isValidTwilioFormRequest({
-      authToken,
-      signature,
-      url: webhookUrl,
-      params
-    })
+    !webhookUrls.some((url) =>
+      isValidTwilioFormRequest({
+        authToken,
+        signature,
+        url,
+        params
+      })
+    )
   ) {
     console.warn("twilio_webhook_signature_rejected");
     return xmlResponse("<Response />", 403);

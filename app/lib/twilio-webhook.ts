@@ -20,18 +20,24 @@ export function formParamsToRecord(params: URLSearchParams) {
   return record;
 }
 
-export function getTwilioWebhookUrl(request: Request) {
+export function getTwilioWebhookUrls(request: Request) {
   const configuredUrl = process.env.TWILIO_WHATSAPP_WEBHOOK_URL?.trim();
-  if (configuredUrl) return configuredUrl;
-
   const forwardedHost = request.headers.get("x-forwarded-host");
   const forwardedProto = request.headers.get("x-forwarded-proto");
-  if (!forwardedHost) return request.url;
-
   const incomingUrl = new URL(request.url);
-  incomingUrl.host = forwardedHost;
-  incomingUrl.protocol = `${forwardedProto?.split(",")[0]?.trim() || "https"}:`;
-  return incomingUrl.toString();
+
+  if (forwardedHost) {
+    incomingUrl.host = forwardedHost.split(",")[0]?.trim() || incomingUrl.host;
+    incomingUrl.protocol = `${forwardedProto?.split(",")[0]?.trim() || "https"}:`;
+  }
+
+  return Array.from(
+    new Set([configuredUrl, incomingUrl.toString(), request.url].filter(Boolean))
+  ) as string[];
+}
+
+export function getTwilioWebhookUrl(request: Request) {
+  return getTwilioWebhookUrls(request)[0] ?? request.url;
 }
 
 export function isValidTwilioFormRequest({

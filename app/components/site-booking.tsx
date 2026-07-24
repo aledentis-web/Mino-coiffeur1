@@ -2,17 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { getAvailableSlots, getEffectiveDuration } from "../lib/booking-engine";
-import type { Customer } from "../lib/domain";
+import { useEffect, useMemo, useState } from "react";
 import {
-  businessConfig,
   nextOpenDates,
   services,
   syntheticCustomers
 } from "../lib/seed";
 import { Brand } from "./brand";
-import { useBookingStore } from "./booking-provider";
 import {
   ArrowUpRight,
   CalendarIcon,
@@ -36,7 +32,6 @@ function formatDate(dateKey: string) {
 }
 
 export function SiteBooking() {
-  const { appointments, customers, bookForContact } = useBookingStore();
   const dates = useMemo(() => nextOpenDates(8), []);
   const [step, setStep] = useState(1);
   const [serviceId, setServiceId] = useState(services[0].id);
@@ -47,30 +42,61 @@ export function SiteBooking() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [confirmedId, setConfirmedId] = useState("");
+  const [slots, setSlots] = useState<
+    Array<{ slot_time: string; duration_minutes: number }>
+  >([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [bookingLoading, setBookingLoading] = useState(false);
 
   const service = services.find((item) => item.id === serviceId)!;
-  const matchedCustomer = customers.find(
+  const matchedCustomer = syntheticCustomers.find(
     (customer) =>
       customer.phone.replace(/\s/g, "") === phone.replace(/\s/g, "")
   );
-  const availabilityCustomer: Customer =
-    matchedCustomer ??
-    ({
-      id: "new-customer-preview",
-      name,
-      phone,
-      preferredServiceId: serviceId,
-      durationOverrides: {},
-      notes: ""
-    } satisfies Customer);
-  const duration = getEffectiveDuration(availabilityCustomer, service);
-  const slots = getAvailableSlots({
-    date,
-    customer: availabilityCustomer,
-    service,
-    appointments,
-    config: businessConfig
-  });
+  const duration = slots[0]?.duration_minutes ?? service.durationMinutes;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const search = new URLSearchParams({
+      service: serviceId,
+      date,
+      phone
+    });
+
+    setAvailabilityLoading(true);
+    setError("");
+
+    fetch(`/api/public/availability?${search.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        const payload = (await response.json()) as {
+          slots?: Array<{ slot_time: string; duration_minutes: number }>;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Orari non disponibili.");
+        }
+        setSlots(payload.slots ?? []);
+      })
+      .catch((requestError: unknown) => {
+        if (requestError instanceof DOMException && requestError.name === "AbortError") {
+          return;
+        }
+        setSlots([]);
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Non è stato possibile caricare gli orari."
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setAvailabilityLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [date, phone, serviceId]);
 
   function chooseService(nextServiceId: string) {
     setServiceId(nextServiceId);
@@ -82,7 +108,7 @@ export function SiteBooking() {
     setTime("");
   }
 
-  function submitBooking() {
+  async function submitBooking() {
     setError("");
     if (!name.trim() || phone.replace(/\D/g, "").length < 8) {
       setError("Inserisci nome e numero di telefono.");
@@ -93,25 +119,45 @@ export function SiteBooking() {
       return;
     }
 
-    const result = bookForContact(
-      { name, phone },
-      {
-        serviceId,
-        date,
-        startTime: time,
-        channel: "site",
-        notes,
-        externalReference: `site-${Date.now()}`
+    setBookingLoading(true);
+    try {
+      const response = await fetch("/api/public/bookings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `site:${crypto.randomUUID()}`
+        },
+        body: JSON.stringify({
+          serviceSlug: serviceId,
+          date,
+          startTime: time,
+          customerName: name,
+          phone,
+          notes
+        })
+      });
+      const payload = (await response.json()) as {
+        appointment?: { id: string; durationMinutes: number };
+        error?: string;
+      };
+
+      if (!response.ok || !payload.appointment) {
+        throw new Error(
+          payload.error ?? "Non è stato possibile confermare l’appuntamento."
+        );
       }
-    );
 
-    if (!result.ok) {
-      setError(result.error);
-      return;
+      setConfirmedId(payload.appointment.id);
+      setStep(4);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Non è stato possibile confermare l’appuntamento."
+      );
+    } finally {
+      setBookingLoading(false);
     }
-
-    setConfirmedId(result.appointment.id);
-    setStep(4);
   }
 
   return (
@@ -244,17 +290,21 @@ export function SiteBooking() {
               </div>
               <div className="slot-heading">
                 <span><ClockIcon /> Orari disponibili</span>
-                <small>{slots.length} possibilità</small>
+                <small>
+                  {availabilityLoading
+                    ? "calcolo in corso"
+                    : `${slots.length} possibilità`}
+                </small>
               </div>
               <div className="slot-grid">
                 {slots.map((slot) => (
                   <button
-                    className={time === slot ? "selected" : ""}
-                    key={slot}
-                    onClick={() => setTime(slot)}
+                    className={time === slot.slot_time ? "selected" : ""}
+                    key={slot.slot_time}
+                    onClick={() => setTime(slot.slot_time)}
                     type="button"
                   >
-                    {slot}
+                    {slot.slot_time}
                   </button>
                 ))}
               </div>
@@ -309,8 +359,13 @@ export function SiteBooking() {
                 </div>
               ) : null}
               {error ? <p className="form-error">{error}</p> : null}
-              <button className="primary-action" onClick={submitBooking} type="button">
-                Conferma appuntamento
+              <button
+                className="primary-action"
+                disabled={bookingLoading}
+                onClick={submitBooking}
+                type="button"
+              >
+                {bookingLoading ? "Conferma in corso…" : "Conferma appuntamento"}
                 <ArrowUpRight />
               </button>
             </div>

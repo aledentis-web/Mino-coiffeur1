@@ -76,9 +76,13 @@ export function parseIncomingWhatsAppMessage(params: URLSearchParams) {
 }
 
 export function buildWhatsAppWelcomeResponse() {
-  const response = new twilio.twiml.MessagingResponse();
-  response.message(
+  return buildWhatsAppResponse(
     "Ciao! Sono il segretario digitale di Studio Barber 8. Il collegamento WhatsApp è attivo. Scrivi PRENOTA per iniziare."
   );
+}
+
+export function buildWhatsAppResponse(message: string) {
+  const response = new twilio.twiml.MessagingResponse();
+  response.message(message.slice(0, 4096));
   return response.toString();
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import twilio from "twilio";
 import {
+  buildWhatsAppResponse,
   buildWhatsAppWelcomeResponse,
   formParamsToRecord,
   isValidTwilioFormRequest,
@@ -67,4 +68,9 @@ test("genera una risposta TwiML valida senza riflettere input utente", () => {
   assert.match(xml, /^<\?xml version="1.0" encoding="UTF-8"\?><Response>/);
   assert.match(xml, /Studio Barber 8/);
   assert.match(xml, /Scrivi PRENOTA/);
+});
+
+test("genera una risposta TwiML dinamica ed esegue l'escape XML", () => {
+  const xml = buildWhatsAppResponse("Taglio & barba <confermato>");
+  assert.match(xml, /Taglio &amp; barba &lt;confermato&gt;/);
 });

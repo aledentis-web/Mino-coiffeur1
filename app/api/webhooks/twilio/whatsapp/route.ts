@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import {
-  buildWhatsAppWelcomeResponse,
+  buildWhatsAppResponse,
   getTwilioWebhookUrl,
   isValidTwilioFormRequest,
   parseIncomingWhatsAppMessage
 } from "../../../../lib/twilio-webhook";
+import { handleWhatsAppAssistantMessage } from "../../../../lib/whatsapp-assistant";
+import {
+  getServerSupabase,
+  SupabaseConfigurationError
+} from "../../../../lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,5 +61,31 @@ export async function POST(request: Request) {
   console.info("twilio_whatsapp_message_received", {
     messageSid: message.messageSid
   });
-  return xmlResponse(buildWhatsAppWelcomeResponse());
+
+  try {
+    const businessSlug =
+      process.env.STUDIO_BARBER_BUSINESS_SLUG ?? "studio-barber-8";
+    const resourceSlug =
+      process.env.STUDIO_BARBER_RESOURCE_SLUG ?? "main";
+    const responseMessage = await handleWhatsAppAssistantMessage({
+      supabase: getServerSupabase(),
+      businessSlug,
+      resourceSlug,
+      phoneE164: message.from,
+      body: message.body,
+      messageSid: message.messageSid
+    });
+    return xmlResponse(buildWhatsAppResponse(responseMessage));
+  } catch (error) {
+    if (error instanceof SupabaseConfigurationError) {
+      console.error("twilio_whatsapp_supabase_not_configured");
+    } else {
+      console.error("twilio_whatsapp_assistant_failed", error);
+    }
+    return xmlResponse(
+      buildWhatsAppResponse(
+        "In questo momento non riesco a consultare l’agenda. Riprova tra poco oppure contatta direttamente Studio Barber 8."
+      )
+    );
+  }
 }

@@ -5,15 +5,9 @@ if (!process.env.VERCEL) {
   process.exit(0);
 }
 
-const required = [
-  "NEXT_PUBLIC_SUPABASE_URL",
-  "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
-  "SUPABASE_SECRET_KEY",
-  "STUDIO_BARBER_BUSINESS_SLUG",
-  "STUDIO_BARBER_RESOURCE_SLUG"
-];
-
+const required = ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SECRET_KEY"];
 const missing = required.filter((key) => !process.env[key]);
+
 if (missing.length > 0) {
   throw new Error(`Missing Vercel environment variables: ${missing.join(", ")}`);
 }
@@ -33,10 +27,12 @@ const supabase = createClient(
   }
 );
 
+const businessSlug =
+  process.env.STUDIO_BARBER_BUSINESS_SLUG ?? "studio-barber-8";
 const { count, error } = await supabase
   .from("businesses")
   .select("id", { count: "exact", head: true })
-  .eq("slug", process.env.STUDIO_BARBER_BUSINESS_SLUG);
+  .eq("slug", businessSlug);
 
 if (error) {
   throw new Error(`Supabase server connection failed: ${error.message}`);

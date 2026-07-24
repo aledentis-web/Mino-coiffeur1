@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/verify-vercel-env.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "node --test app/lib/*.test.ts"

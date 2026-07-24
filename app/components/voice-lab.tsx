@@ -242,7 +242,7 @@ export function VoiceLab() {
             <strong>Test protetto</strong>
             <p>
               L’endpoint è accessibile solo dalla sessione amministratore.
-              Nessuna chiave Meta viene inviata al browser.
+              Nessuna credenziale Twilio viene inviata al browser.
             </p>
           </div>
         </aside>

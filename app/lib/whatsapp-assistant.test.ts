@@ -33,6 +33,8 @@ test("interpreta date italiane, oggi e domani", () => {
   assert.equal(parseItalianBookingDate("DOMANI", NOW), "2026-07-25");
   assert.equal(parseItalianBookingDate("28/07", NOW), "2026-07-28");
   assert.equal(parseItalianBookingDate("28-07-2026", NOW), "2026-07-28");
+  assert.equal(parseItalianBookingDate("28 luglio", NOW), "2026-07-28");
+  assert.equal(parseItalianBookingDate("sabato", NOW), "2026-07-25");
 });
 
 test("rifiuta date impossibili o fuori dalla finestra", () => {
@@ -54,5 +56,7 @@ test("riconosce slot per numero e orario", () => {
   const slots = ["09:00", "09:30", "10:00"];
   assert.equal(resolveSlotChoice("2", slots), "09:30");
   assert.equal(resolveSlotChoice("9.00", slots), "09:00");
+  assert.equal(resolveSlotChoice("nove e trenta", slots), "09:30");
+  assert.equal(resolveSlotChoice("ore dieci", slots), "10:00");
   assert.equal(resolveSlotChoice("11:00", slots), null);
 });

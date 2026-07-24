@@ -326,8 +326,8 @@ export function AdminDashboard() {
             </article>
             <article className="assistant-card" id="assistente">
               <span>Segretario digitale</span>
-              <strong>Voce in test</strong>
-              <small><i /> Meta + browser collegabili</small>
+              <strong>Twilio attivo</strong>
+              <small><i /> WhatsApp collegato · voce pronta</small>
             </article>
           </section>
 

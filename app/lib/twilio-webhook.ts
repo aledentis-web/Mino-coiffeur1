@@ -20,8 +20,26 @@ export function formParamsToRecord(params: URLSearchParams) {
   return record;
 }
 
-export function getTwilioWebhookUrls(request: Request) {
-  const configuredUrl = process.env.TWILIO_WHATSAPP_WEBHOOK_URL?.trim();
+function appendIncomingSearch(
+  configuredUrl: string | undefined,
+  requestUrl: string
+) {
+  if (!configuredUrl) return undefined;
+
+  try {
+    const stableUrl = new URL(configuredUrl);
+    stableUrl.search = new URL(requestUrl).search;
+    return stableUrl.toString();
+  } catch {
+    return configuredUrl;
+  }
+}
+
+export function getTwilioWebhookUrls(
+  request: Request,
+  configuredUrl = process.env.TWILIO_WHATSAPP_WEBHOOK_URL?.trim()
+) {
+  const stableUrl = appendIncomingSearch(configuredUrl, request.url);
   const forwardedHost = request.headers.get("x-forwarded-host");
   const forwardedProto = request.headers.get("x-forwarded-proto");
   const incomingUrl = new URL(request.url);
@@ -32,7 +50,7 @@ export function getTwilioWebhookUrls(request: Request) {
   }
 
   return Array.from(
-    new Set([configuredUrl, incomingUrl.toString(), request.url].filter(Boolean))
+    new Set([stableUrl, incomingUrl.toString(), request.url].filter(Boolean))
   ) as string[];
 }
 

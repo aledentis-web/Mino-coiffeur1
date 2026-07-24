@@ -594,7 +594,7 @@ export async function handleBookingAssistantMessage({
       p_channel: bookingChannel,
       p_notes:
         bookingChannel === "voice"
-          ? "Prenotazione gestita dal laboratorio vocale."
+          ? "Prenotazione gestita dal segretario digitale telefonico."
           : "Prenotazione gestita dal segretario digitale WhatsApp.",
       p_external_reference: messageSid.startsWith(
         `${externalReferencePrefix}:`

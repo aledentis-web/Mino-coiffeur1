@@ -28,7 +28,7 @@ const supabase = createClient(
 );
 
 const businessSlug =
-  process.env.STUDIO_BARBER_BUSINESS_SLUG ?? "studio-barber-8";
+  process.env.STUDIO_BARBER_BUSINESS_SLUG?.trim() || "studio-barber-8";
 const { count, error } = await supabase
   .from("businesses")
   .select("id", { count: "exact", head: true })
@@ -39,7 +39,9 @@ if (error) {
 }
 
 if (count !== 1) {
-  throw new Error(`Expected one configured business, received ${count ?? 0}.`);
+  throw new Error(
+    `Configured business slug ${JSON.stringify(businessSlug)} did not match exactly one business.`
+  );
 }
 
 console.log("Vercel environment and Supabase server connection verified.");

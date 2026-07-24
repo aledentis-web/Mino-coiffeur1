@@ -249,11 +249,11 @@ export function AdminDashboard() {
             <UsersIcon />
             Clienti test
           </Link>
-          <a href="#assistente">
+          <Link href="/admin/voice">
             <HeadsetIcon />
             Assistente
-            <small>Presto</small>
-          </a>
+            <small>Test voce</small>
+          </Link>
         </nav>
         <div className="sidebar-bottom">
           <span className="system-status"><i /> Sistema operativo</span>
@@ -326,8 +326,8 @@ export function AdminDashboard() {
             </article>
             <article className="assistant-card" id="assistente">
               <span>Segretario digitale</span>
-              <strong>In preparazione</strong>
-              <small><i /> Booking Engine collegato</small>
+              <strong>Voce in test</strong>
+              <small><i /> Meta + browser collegabili</small>
             </article>
           </section>
 

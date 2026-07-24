@@ -172,12 +172,12 @@ export function TestLab() {
         <article>
           <span className="channel-icon whatsapp"><WhatsAppIcon /></span>
           <div><small>Ingresso 02</small><strong>WhatsApp</strong></div>
-          <em className="planned">Adapter pronto</em>
+          <em className="planned">Meta Cloud API</em>
         </article>
         <article>
           <span className="channel-icon voice"><PhoneIcon /></span>
           <div><small>Ingresso 03</small><strong>Chiamata</strong></div>
-          <em className="planned">Adapter pronto</em>
+          <Link className="planned" href="/admin/voice">Apri test voce</Link>
         </article>
         <article>
           <span className="channel-icon manual"><HeadsetIcon /></span>
@@ -272,4 +272,3 @@ export function TestLab() {
     </main>
   );
 }
-

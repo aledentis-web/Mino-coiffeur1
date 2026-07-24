@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { BookingChannel } from "./domain";
 import {
   normalizeWhatsAppText,
   parseItalianBookingDate,
@@ -45,13 +46,17 @@ type AssistantInput = {
   phoneE164: string;
   body: string;
   messageSid: string;
+  bookingChannel?: Extract<BookingChannel, "whatsapp" | "voice">;
+  externalReferencePrefix?: "meta" | "twilio" | "voice";
   now?: Date;
 };
 
-export type WhatsAppAssistantResult = {
+export type BookingAssistantResult = {
   response: string;
   duplicate: boolean;
 };
+
+export type WhatsAppAssistantResult = BookingAssistantResult;
 
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_VISIBLE_SLOTS = 12;
@@ -140,7 +145,7 @@ async function saveConversation({
   return {
     response,
     duplicate: false
-  } satisfies WhatsAppAssistantResult;
+  } satisfies BookingAssistantResult;
 }
 
 async function getServices(
@@ -227,13 +232,15 @@ async function startBooking({
   });
 }
 
-export async function handleWhatsAppAssistantMessage({
+export async function handleBookingAssistantMessage({
   supabase,
   businessSlug,
   resourceSlug,
   phoneE164,
   body,
   messageSid,
+  bookingChannel = "whatsapp",
+  externalReferencePrefix = "twilio",
   now = new Date()
 }: AssistantInput) {
   const { data: business, error: businessError } = await supabase
@@ -273,7 +280,7 @@ export async function handleWhatsAppAssistantMessage({
     return {
       response: previous.last_response_text,
       duplicate: true
-    } satisfies WhatsAppAssistantResult;
+    } satisfies BookingAssistantResult;
   }
 
   const normalizedBody = normalizeWhatsAppText(body);
@@ -584,9 +591,16 @@ export async function handleWhatsAppAssistantMessage({
       p_start_time: context.startTime,
       p_customer_name: context.customerName,
       p_phone_e164: phoneE164,
-      p_channel: "whatsapp",
-      p_notes: "Prenotazione gestita dal segretario digitale WhatsApp.",
-      p_external_reference: `wa:${messageSid}`,
+      p_channel: bookingChannel,
+      p_notes:
+        bookingChannel === "voice"
+          ? "Prenotazione gestita dal laboratorio vocale."
+          : "Prenotazione gestita dal segretario digitale WhatsApp.",
+      p_external_reference: messageSid.startsWith(
+        `${externalReferencePrefix}:`
+      )
+        ? messageSid
+        : `${externalReferencePrefix}:${messageSid}`,
       p_resource_slug: resourceSlug
     });
 
@@ -640,3 +654,5 @@ export async function handleWhatsAppAssistantMessage({
     now
   });
 }
+
+export const handleWhatsAppAssistantMessage = handleBookingAssistantMessage;

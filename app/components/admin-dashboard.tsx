@@ -1,15 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { getAvailableSlots, getEffectiveDuration } from "../lib/booking-engine";
+import { useEffect, useMemo, useState } from "react";
+import { getEffectiveDuration } from "../lib/booking-engine";
+import type { Appointment } from "../lib/domain";
 import {
-  businessConfig,
   nextOpenDates,
-  services
+  services,
+  syntheticCustomers
 } from "../lib/seed";
 import { Brand } from "./brand";
-import { useBookingStore } from "./booking-provider";
 import { ChannelBadge } from "./channel-badge";
 import {
   ArrowUpRight,
@@ -41,9 +41,10 @@ function formatDate(dateKey: string, long = false) {
 }
 
 export function AdminDashboard() {
-  const { appointments, customers, book, cancel, resetDemo } =
-    useBookingStore();
+  const customers = syntheticCustomers;
   const dates = useMemo(() => nextOpenDates(9), []);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [agendaLoading, setAgendaLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(dates[0]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -53,6 +54,10 @@ export function AdminDashboard() {
   const [manualTime, setManualTime] = useState("");
   const [notes, setNotes] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [manualSlots, setManualSlots] = useState<
+    Array<{ slot_time: string; duration_minutes: number }>
+  >([]);
+  const [manualLoading, setManualLoading] = useState(false);
 
   const dayAppointments = appointments
     .filter(
@@ -65,47 +70,160 @@ export function AdminDashboard() {
     customers.find((customer) => customer.id === customerId) ?? customers[0];
   const selectedService =
     services.find((service) => service.id === serviceId) ?? services[0];
-  const manualSlots = selectedCustomer
-    ? getAvailableSlots({
-        date: manualDate,
-        customer: selectedCustomer,
-        service: selectedService,
-        appointments,
-        config: businessConfig
-      })
-    : [];
   const bookedMinutes = dayAppointments.reduce(
     (total, appointment) => total + appointment.durationMinutes,
     0
   );
   const utilization = Math.min(100, Math.round((bookedMinutes / 540) * 100));
 
-  function createManualBooking() {
+  async function loadAgenda(dateKey: string) {
+    setAgendaLoading(true);
+    setFeedback("");
+    try {
+      const response = await fetch(
+        `/api/admin/agenda?date=${encodeURIComponent(dateKey)}`,
+        { cache: "no-store" }
+      );
+      const payload = (await response.json()) as {
+        appointments?: Appointment[];
+        error?: string;
+      };
+      if (response.status === 401) {
+        window.location.assign("/admin/login");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Agenda non disponibile.");
+      }
+      setAppointments(payload.appointments ?? []);
+    } catch (requestError) {
+      setFeedback(
+        requestError instanceof Error
+          ? requestError.message
+          : "Agenda non disponibile."
+      );
+    } finally {
+      setAgendaLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadAgenda(selectedDate);
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (!manualOpen || !selectedCustomer) return;
+
+    const controller = new AbortController();
+    const search = new URLSearchParams({
+      service: serviceId,
+      date: manualDate,
+      phone: selectedCustomer.phone
+    });
+    setManualLoading(true);
+    setManualTime("");
+
+    fetch(`/api/public/availability?${search.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        const payload = (await response.json()) as {
+          slots?: Array<{ slot_time: string; duration_minutes: number }>;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Orari non disponibili.");
+        }
+        setManualSlots(payload.slots ?? []);
+      })
+      .catch((requestError: unknown) => {
+        if (requestError instanceof DOMException && requestError.name === "AbortError") {
+          return;
+        }
+        setManualSlots([]);
+        setFeedback(
+          requestError instanceof Error
+            ? requestError.message
+            : "Orari non disponibili."
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setManualLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [manualDate, manualOpen, selectedCustomer, serviceId]);
+
+  async function createManualBooking() {
     setFeedback("");
     if (!selectedCustomer || !manualTime) {
       setFeedback("Scegli cliente e orario.");
       return;
     }
 
-    const result = book({
-      customerId: selectedCustomer.id,
-      serviceId,
-      date: manualDate,
-      startTime: manualTime,
-      channel: "manual",
-      notes,
-      externalReference: `manual-${Date.now()}`
-    });
+    setManualLoading(true);
+    try {
+      const response = await fetch("/api/admin/bookings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `manual:${crypto.randomUUID()}`
+        },
+        body: JSON.stringify({
+          serviceSlug: serviceId,
+          date: manualDate,
+          startTime: manualTime,
+          customerName: selectedCustomer.name,
+          phone: selectedCustomer.phone,
+          notes
+        })
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (response.status === 401) {
+        window.location.assign("/admin/login");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(
+          payload.error ?? "Non è stato possibile creare l’appuntamento."
+        );
+      }
 
-    if (!result.ok) {
-      setFeedback(result.error);
+      setSelectedDate(manualDate);
+      setManualOpen(false);
+      setManualTime("");
+      setNotes("");
+      await loadAgenda(manualDate);
+    } catch (requestError) {
+      setFeedback(
+        requestError instanceof Error
+          ? requestError.message
+          : "Non è stato possibile creare l’appuntamento."
+      );
+    } finally {
+      setManualLoading(false);
+    }
+  }
+
+  async function cancelAppointment(appointmentId: string) {
+    setFeedback("");
+    const response = await fetch(
+      `/api/admin/bookings?id=${encodeURIComponent(appointmentId)}`,
+      { method: "DELETE" }
+    );
+    const payload = (await response.json()) as { error?: string };
+    if (response.status === 401) {
+      window.location.assign("/admin/login");
       return;
     }
-
-    setSelectedDate(manualDate);
-    setManualOpen(false);
-    setManualTime("");
-    setNotes("");
+    if (!response.ok) {
+      setFeedback(
+        payload.error ?? "Non è stato possibile annullare l’appuntamento."
+      );
+      return;
+    }
+    await loadAgenda(selectedDate);
   }
 
   return (
@@ -143,6 +261,16 @@ export function AdminDashboard() {
             Sito pubblico
             <ArrowUpRight />
           </Link>
+          <button
+            className="quiet-button"
+            onClick={async () => {
+              await fetch("/api/admin/session", { method: "DELETE" });
+              window.location.assign("/admin/login");
+            }}
+            type="button"
+          >
+            Esci dall’agenda
+          </button>
         </div>
       </aside>
 
@@ -177,6 +305,9 @@ export function AdminDashboard() {
         </header>
 
         <div className="admin-content">
+          {feedback && !manualOpen ? (
+            <p className="form-error">{feedback}</p>
+          ) : null}
           <section className="metric-grid">
             <article>
               <span>Appuntamenti</span>
@@ -231,7 +362,13 @@ export function AdminDashboard() {
             </div>
 
             <div className="appointment-list">
-              {dayAppointments.length > 0 ? (
+              {agendaLoading ? (
+                <div className="empty-agenda">
+                  <span><ClockIcon /></span>
+                  <h3>Aggiornamento agenda</h3>
+                  <p>Sto leggendo gli appuntamenti dalla fonte centrale.</p>
+                </div>
+              ) : dayAppointments.length > 0 ? (
                 dayAppointments.map((appointment) => (
                   <article className="appointment-row" key={appointment.id}>
                     <div className="appointment-time">
@@ -251,9 +388,9 @@ export function AdminDashboard() {
                         <strong>{appointment.serviceName}</strong>
                         <small>
                           {appointment.durationMinutes} minuti
-                          {customers.find(
-                            (customer) => customer.id === appointment.customerId
-                          )?.durationOverrides[appointment.serviceId]
+                          {services.find(
+                            (service) => service.name === appointment.serviceName
+                          )?.durationMinutes !== appointment.durationMinutes
                             ? " · durata personale"
                             : ""}
                         </small>
@@ -261,7 +398,7 @@ export function AdminDashboard() {
                       <ChannelBadge channel={appointment.channel} />
                       <button
                         className="row-action"
-                        onClick={() => cancel(appointment.id)}
+                        onClick={() => void cancelAppointment(appointment.id)}
                         type="button"
                       >
                         Annulla
@@ -293,13 +430,15 @@ export function AdminDashboard() {
           <div className="demo-note">
             <span><CheckIcon /></span>
             <div>
-              <strong>Modalità business test</strong>
+              <strong>Agenda centrale attiva</strong>
               <p>
-                I dati sono sintetici e persistono soltanto in questa preview.
-                Il Booking Engine è già indipendente dall’archivio demo.
+                Sito e inserimento manuale leggono e scrivono sullo stesso
+                database. Ogni modifica è visibile da tutti i dispositivi.
               </p>
             </div>
-            <button onClick={resetDemo} type="button">Ripristina dati</button>
+            <button onClick={() => void loadAgenda(selectedDate)} type="button">
+              Aggiorna
+            </button>
           </div>
         </div>
       </section>
@@ -363,9 +502,10 @@ export function AdminDashboard() {
                 <label>
                   <span>Durata calcolata</span>
                   <div className="readonly-field">
-                    {selectedCustomer
-                      ? getEffectiveDuration(selectedCustomer, selectedService)
-                      : selectedService.durationMinutes} minuti
+                    {manualSlots[0]?.duration_minutes ??
+                      (selectedCustomer
+                        ? getEffectiveDuration(selectedCustomer, selectedService)
+                        : selectedService.durationMinutes)} minuti
                   </div>
                 </label>
               </div>
@@ -390,14 +530,17 @@ export function AdminDashboard() {
                 <div className="modal-slots">
                   {manualSlots.map((slot) => (
                     <button
-                      className={manualTime === slot ? "selected" : ""}
-                      key={slot}
-                      onClick={() => setManualTime(slot)}
+                      className={manualTime === slot.slot_time ? "selected" : ""}
+                      key={slot.slot_time}
+                      onClick={() => setManualTime(slot.slot_time)}
                       type="button"
                     >
-                      {slot}
+                      {slot.slot_time}
                     </button>
                   ))}
+                  {!manualLoading && manualSlots.length === 0 ? (
+                    <small>Nessun orario disponibile.</small>
+                  ) : null}
                 </div>
               </label>
               <label>
@@ -413,12 +556,14 @@ export function AdminDashboard() {
             {feedback ? <p className="form-error">{feedback}</p> : null}
             <button
               className="admin-primary modal-submit"
-              disabled={!manualTime}
-              onClick={createManualBooking}
+              disabled={!manualTime || manualLoading}
+              onClick={() => void createManualBooking()}
               type="button"
             >
               <CheckIcon />
-              Conferma e aggiungi all’agenda
+              {manualLoading
+                ? "Aggiornamento in corso…"
+                : "Conferma e aggiungi all’agenda"}
             </button>
           </section>
         </div>

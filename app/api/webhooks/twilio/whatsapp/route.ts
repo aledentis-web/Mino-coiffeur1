@@ -28,6 +28,55 @@ function xmlResponse(xml: string, status = 200) {
   });
 }
 
+type DeliveryStatus = "pending" | "sent" | "failed";
+
+function getTwilioRestError(error: unknown) {
+  const record =
+    typeof error === "object" && error !== null
+      ? (error as Record<string, unknown>)
+      : {};
+  const rawCode = record.code ?? record.status ?? "UNKNOWN";
+  const rawMessage =
+    typeof record.message === "string" ? record.message : "Unknown Twilio error";
+
+  return {
+    code: String(rawCode).slice(0,80),
+    message: rawMessage.replace(/\s+/g, " ").slice(0,500)
+  };
+}
+
+async function recordDeliveryAttempt({
+  messageSid,
+  status,
+  outboundSid,
+  errorCode,
+  errorMessage
+}: {
+  messageSid: string;
+  status: DeliveryStatus;
+  outboundSid?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}) {
+  const { error } = await getServerSupabase()
+    .from("whatsapp_conversations")
+    .update({
+      last_delivery_status: status,
+      last_outbound_sid: outboundSid ?? null,
+      last_delivery_error_code: errorCode ?? null,
+      last_delivery_error_message: errorMessage ?? null,
+      last_delivery_attempt_at: new Date().toISOString()
+    })
+    .eq("last_message_sid", messageSid);
+
+  if (error) {
+    console.error("twilio_whatsapp_delivery_diagnostic_failed", {
+      messageSid,
+      code: error.code
+    });
+  }
+}
+
 async function processAndReply({
   accountSid,
   authToken,
@@ -73,11 +122,21 @@ async function processAndReply({
   }
 
   try {
+    await recordDeliveryAttempt({
+      messageSid: message.messageSid,
+      status: "pending"
+    });
+
     const client = twilio(accountSid, authToken);
     const outbound = await client.messages.create({
       body: responseMessage,
       from: `whatsapp:${message.to}`,
       to: `whatsapp:${message.from}`
+    });
+    await recordDeliveryAttempt({
+      messageSid: message.messageSid,
+      status: "sent",
+      outboundSid: outbound.sid
     });
     console.info("twilio_whatsapp_reply_sent", {
       inboundMessageSid: message.messageSid,
@@ -85,10 +144,18 @@ async function processAndReply({
       durationMs: Date.now() - startedAt
     });
   } catch (error) {
+    const twilioError = getTwilioRestError(error);
+    await recordDeliveryAttempt({
+      messageSid: message.messageSid,
+      status: "failed",
+      errorCode: twilioError.code,
+      errorMessage: twilioError.message
+    });
     console.error("twilio_whatsapp_reply_failed", {
       inboundMessageSid: message.messageSid,
       durationMs: Date.now() - startedAt,
-      error
+      code: twilioError.code,
+      message: twilioError.message
     });
   }
 }

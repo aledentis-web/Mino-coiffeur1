@@ -242,7 +242,7 @@ export function VoiceLab() {
             <strong>Test protetto</strong>
             <p>
               L’endpoint è accessibile solo dalla sessione amministratore.
-              Nessuna credenziale Twilio viene inviata al browser.
+              Le chiavi OpenAI e Supabase restano esclusivamente sul server.
             </p>
           </div>
         </aside>

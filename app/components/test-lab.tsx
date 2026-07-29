@@ -172,12 +172,12 @@ export function TestLab() {
         <article>
           <span className="channel-icon whatsapp"><WhatsAppIcon /></span>
           <div><small>Ingresso 02</small><strong>WhatsApp</strong></div>
-          <em>Twilio attivo</em>
+          <em>Meta da collegare</em>
         </article>
         <article>
           <span className="channel-icon voice"><PhoneIcon /></span>
           <div><small>Ingresso 03</small><strong>Chiamata</strong></div>
-          <Link href="/admin/voice">Webhook + test voce</Link>
+          <Link href="/admin/voice">Test microfono browser</Link>
         </article>
         <article>
           <span className="channel-icon manual"><HeadsetIcon /></span>

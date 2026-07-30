@@ -1,6 +1,6 @@
 # Verification report — OpenAI e voce browser
 
-Data: 29 luglio 2026
+Data: 30 luglio 2026
 
 ## Storia verificata
 
@@ -14,7 +14,7 @@ atomicamente nell'agenda Supabase.
 | Confine | Stato | Evidenza |
 | --- | --- | --- |
 | UI pubblica | Superato | `/` risponde `200` e contiene il brand Studio Barber |
-| Laboratorio vocale | Superato | `/lab` risponde `200` e presenta il test microfono browser |
+| Laboratorio vocale | Superato | registrazione `MediaRecorder`, trascrizione OpenAI server-side e input manuale |
 | Login agenda | Superato | `/admin/login` risponde `200` |
 | Route stato admin | Superato | senza sessione risponde `401` |
 | Motore conversazionale | Superato | parser deterministico e fallback OpenAI con output strutturato |
@@ -37,16 +37,19 @@ npm audit --omit=dev --audit-level=high
 Risultato dello sprint:
 
 - typecheck superato;
-- 31 test superati;
+- 34 test automatici superati;
 - build Next.js 16.2.12 superata;
 - nessun riferimento al provider precedente residuo;
 - nessuna credenziale rilevata nei file versionati;
 - nessuna vulnerabilità npm rilevata.
 
-## Verifiche live da completare
+## Verifiche live
 
-- La chiamata OpenAI reale richiede `OPENAI_API_KEY` nell'ambiente server.
-  Senza chiave il fallback deterministico è stato verificato e resta operativo.
+- La chiave locale dedicata ha superato uno smoke test reale sulla Responses
+  API con risposta HTTP `200`. La chiave resta in `.env.local`, ignorata da Git.
+- Un campione MP3 locale con la frase “Vorrei prenotare un taglio domani” ha
+  attraversato login amministrativo, route protetta e Audio API. La risposta
+  reale è stata “Vorrei prenotare un taglio domani.”.
 - Il test WhatsApp reale richiede il completamento dell'onboarding Meta.
 - La telefonata reale richiede una decisione separata sul provider SIP
   italiano.

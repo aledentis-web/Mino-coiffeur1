@@ -32,9 +32,11 @@ test("non dichiara pronti canali con configurazione incompleta", () => {
 
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
     process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
+    assert.equal(getAssistantStatus().bookingEngine, true);
+    assert.equal(getAssistantStatus().browserVoice, false);
+
     process.env.OPENAI_API_KEY = "sk-test";
     process.env.VOICE_SIP_FORWARDING_NUMBER = "+390000000000";
-    assert.equal(getAssistantStatus().bookingEngine, true);
     assert.equal(getAssistantStatus().languageAgent, true);
     assert.equal(getAssistantStatus().browserVoice, true);
     assert.equal(getAssistantStatus().phoneVoice, true);

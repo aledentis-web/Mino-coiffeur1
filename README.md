@@ -83,9 +83,10 @@ STUDIO_BARBER_ADMIN_PASSWORD=
 
 OPENAI_API_KEY=
 OPENAI_ASSISTANT_MODEL=gpt-5-mini
+OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe
 OPENAI_PROJECT_ID=
 OPENAI_WEBHOOK_SECRET=
-OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini
+OPENAI_REALTIME_MODEL=gpt-realtime-mini
 VOICE_SIP_FORWARDING_NUMBER=
 
 N8N_AUTOMATION_SECRET=
@@ -128,10 +129,12 @@ ambiente server. La repository non contiene né legge credenziali dal browser.
 6. dire “Vorrei prenotare”, completare il flusso e verificare l'appuntamento in
    agenda.
 
-La trascrizione e la sintesi usano le API vocali disponibili nel browser.
-Ogni turno testuale attraversa lo stesso backend di WhatsApp e salva sullo
-stesso database. L’input manuale resta disponibile nei browser senza
-riconoscimento vocale.
+Il browser registra al massimo 20 secondi con `MediaRecorder` e invia l'audio
+alla route protetta `/api/admin/assistant/transcribe`. Il server accetta solo
+formati audio esplicitamente ammessi, impone un limite di 10 MB e trascrive con
+`gpt-transcribe`, senza esporre la chiave OpenAI. Il testo attraversa poi lo
+stesso backend di WhatsApp e salva sullo stesso database. La sintesi della
+risposta resta locale nel browser e l’input manuale è sempre disponibile.
 
 ## WhatsApp Meta
 

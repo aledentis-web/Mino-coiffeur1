@@ -28,7 +28,7 @@ export function getAssistantStatus(): AssistantStatus {
     bookingEngine,
     languageAgent,
     whatsapp,
-    browserVoice: bookingEngine,
+    browserVoice: bookingEngine && languageAgent,
     phoneVoice:
       bookingEngine &&
       languageAgent &&

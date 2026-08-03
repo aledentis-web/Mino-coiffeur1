@@ -6,7 +6,7 @@ import {
   getServerSupabase,
   SupabaseConfigurationError
 } from "../../../lib/supabase/server";
-import { handleBookingAssistantMessage } from "../../../lib/whatsapp-assistant";
+import { handleBookingAgentMessage } from "../../../lib/booking-agent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const input = parseVoiceLabInput(await request.json());
-    const result = await handleBookingAssistantMessage({
+    const result = await handleBookingAgentMessage({
       supabase: getServerSupabase(),
       businessSlug:
         process.env.STUDIO_BARBER_BUSINESS_SLUG?.trim() || "studio-barber-8",

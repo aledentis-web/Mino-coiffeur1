@@ -9,7 +9,7 @@
     "postbuild": "node scripts/verify-vercel-env.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test app/lib/*.test.ts"
+    "test": "node --conditions=react-server --test app/lib/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",

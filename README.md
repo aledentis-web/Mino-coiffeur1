@@ -10,8 +10,7 @@ chiamate e inserimento manuale.
 - agenda centralizzata Supabase: operativa;
 - inserimento manuale: operativo;
 - dataset e simulazione di 100 clienti: operativi;
-- WhatsApp: webhook Meta Cloud API pronto, configurazione Meta esterna da
-  completare;
+- WhatsApp: numero reale registrato, webhook Meta verificato e sottoscritto;
 - voce: laboratorio protetto con microfono del browser pronto;
 - telefonate reali: predisposizione OpenAI Realtime/SIP documentata, provider
   SIP italiano ancora da scegliere;
@@ -47,12 +46,12 @@ Numero italiano Very
               └─> stesso motore prenotazioni
 ```
 
-Il database rimane la fonte autorevole. OpenAI non crea appuntamenti e non
-inventa disponibilità: interpreta soltanto le frasi non riconosciute dai
-parser deterministici. Il risultato strutturato viene accettato esclusivamente
-se corrisponde a un servizio, una data valida o uno slot fornito da Supabase.
-Se OpenAI non è configurato o non risponde entro il timeout, il flusso
-deterministico continua a funzionare.
+Il database rimane la fonte autorevole. OpenAI estrae dal messaggio servizio,
+data, orario, nome, correzioni e conferma, ma non crea appuntamenti e non
+inventa disponibilità. Il server conserva il contesto in Supabase, convalida
+ogni dato e interroga sempre la RPC di disponibilità prima del riepilogo e
+della creazione. Se OpenAI non è configurato o non risponde entro il timeout,
+il precedente flusso deterministico continua a funzionare.
 
 ## Sicurezza e multi-tenancy
 
@@ -110,11 +109,17 @@ variabili obbligatorie e del tenant Supabase configurato.
 Il modello predefinito è `gpt-5-mini`, sostituibile con
 `OPENAI_ASSISTANT_MODEL`. L'integrazione usa direttamente la Responses API:
 
-1. il parser locale prova a comprendere il messaggio;
-2. solo in caso di fallimento viene richiesto un intento strutturato;
-3. il server convalida nuovamente l'intento contro il contesto reale;
-4. il motore deterministico applica la transizione e, se confermata, chiama la
-   RPC Supabase.
+1. OpenAI estrae in un solo turno tutti i dati esplicitamente forniti, senza
+   ricopiare quelli già presenti nel contesto;
+2. il server applica eventuali correzioni e conserva gli altri dati;
+3. servizio, data e orario vengono convalidati contro servizi e disponibilità
+   reali di Supabase;
+4. il motore chiede soltanto i dati mancanti oppure propone orari alternativi;
+5. quando i dati sono completi mostra un riepilogo e attende un sì esplicito;
+6. dopo la conferma ricontrolla lo slot e chiama la RPC atomica
+   `create_public_booking`;
+7. se l'estrazione OpenAI non è disponibile, delega l'intero turno al vecchio
+   assistente deterministico.
 
 Per un test completo serve la chiave di progetto Studio Barber 8 nel solo
 ambiente server. La repository non contiene né legge credenziali dal browser.
@@ -138,16 +143,12 @@ risposta resta locale nel browser e l’input manuale è sempre disponibile.
 
 ## WhatsApp Meta
 
-Il numero Very può essere usato come numero pubblico e registrato in WhatsApp
-Business Platform quando l'account Meta sarà sbloccato.
+Il numero reale è registrato in WhatsApp Business Platform. Il webhook Meta è
+verificato e sottoscritto; le credenziali restano nelle variabili server-side
+della Preview Vercel.
 
-1. creare o selezionare l'app Meta Business;
-2. aggiungere WhatsApp e registrare il numero;
-3. configurare `GET`/`POST` verso
-   `/api/webhooks/meta/whatsapp`;
-4. impostare le cinque variabili `META_*`;
-5. eseguire prima il test con il numero di test Meta;
-6. verificare prenotazione e provenienza `whatsapp` nell'agenda.
+Per una verifica end-to-end inviare una frase completa al numero registrato,
+confermare il riepilogo e controllare la provenienza `whatsapp` nell'agenda.
 
 Non sono necessarie modifiche al motore prenotazioni quando si passa dal
 numero di test al numero definitivo.

@@ -91,7 +91,8 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
       body: message.body,
       messageSid: message.messageId,
       bookingChannel: "whatsapp",
-      externalReferencePrefix: "meta"
+      externalReferencePrefix: "meta",
+      occurredAt: message.occurredAt
     });
     responseMessage = result.response;
     duplicate = result.duplicate;

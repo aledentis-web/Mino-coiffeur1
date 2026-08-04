@@ -62,6 +62,7 @@ test("estrae messaggi testuali WhatsApp dal webhook Meta", () => {
                 {
                   from: "393331234567",
                   id: "wamid.test-message-123456",
+                  timestamp: "1785751200",
                   type: "text",
                   text: { body: "Vorrei prenotare" }
                 },
@@ -84,7 +85,8 @@ test("estrae messaggi testuali WhatsApp dal webhook Meta", () => {
       body: "Vorrei prenotare",
       from: "+393331234567",
       messageId: "wamid.test-message-123456",
-      phoneNumberId: "123456789012345"
+      phoneNumberId: "123456789012345",
+      occurredAt: new Date("2026-08-03T10:00:00.000Z")
     }
   ]);
 });

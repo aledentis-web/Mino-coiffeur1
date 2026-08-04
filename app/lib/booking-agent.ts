@@ -2,8 +2,10 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BookingChannel } from "./domain";
+import { interpretDeterministicBookingTurn } from "./booking-agent-fallback.ts";
 import { interpretBookingAgentTurn } from "./booking-agent-language.ts";
 import {
+  invalidBookingFields,
   turnChangesBooking,
   type BookingAgentTurn
 } from "./booking-agent-language-helpers.ts";
@@ -34,11 +36,11 @@ type ConversationRow = {
   last_message_sid: string | null;
   last_response_text: string | null;
   expires_at: string;
+  version: number;
+  last_event_order_key: string | null;
 };
 
-type AvailabilitySlot = {
-  slot_time: string;
-};
+type AvailabilitySlot = { slot_time: string };
 
 export type BookingAgentInput = {
   supabase: SupabaseClient;
@@ -49,6 +51,7 @@ export type BookingAgentInput = {
   messageSid: string;
   bookingChannel?: Extract<BookingChannel, "whatsapp" | "voice">;
   externalReferencePrefix?: "meta" | "assistant" | "voice";
+  occurredAt?: Date;
   now?: Date;
 };
 
@@ -59,12 +62,21 @@ export type BookingAgentResult = {
 
 type BookingAgentDependencies = {
   interpretTurn?: typeof interpretBookingAgentTurn;
-  fallback?: (input: BookingAgentInput) => Promise<BookingAgentResult>;
+  interpretFallbackTurn?: typeof interpretDeterministicBookingTurn;
 };
+
+type EventClaim =
+  | { mode: "legacy" }
+  | { mode: "durable"; status: "claimed" }
+  | { mode: "durable"; status: "duplicate" | "busy"; response: string };
 
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_VISIBLE_SLOTS = 8;
 const ALTERNATIVE_DAY_LOOKAHEAD = 7;
+const MAX_CONVERSATION_RETRIES = 3;
+
+class ConversationConflictError extends Error {}
+class StaleConversationEventError extends Error {}
 
 function formatItalianDate(date: string) {
   return new Intl.DateTimeFormat("it-IT", {
@@ -89,10 +101,7 @@ function formatServiceList(services: ServiceOption[]) {
 }
 
 function formatSlotList(slots: string[]) {
-  return slots
-    .slice(0, MAX_VISIBLE_SLOTS)
-    .map((slot) => slot)
-    .join(", ");
+  return slots.slice(0, MAX_VISIBLE_SLOTS).join(", ");
 }
 
 function addDays(date: string, days: number) {
@@ -156,40 +165,43 @@ export function mergeBookingAgentContext({
   knownCustomerName?: string;
 }) {
   const next: BookingAgentContext = { ...current };
-  const changed = turnChangesBooking(turn);
-  if (changed) next.confirmationPending = false;
+  if (turnChangesBooking(turn)) next.confirmationPending = false;
 
-  if (turn.mentioned.service) {
-    const service = services.find((item) => item.slug === turn.serviceSlug);
-    const serviceChanged = next.serviceSlug !== service?.slug;
+  if (turn.service.status === "valid") {
+    const service = services.find((item) => item.slug === turn.service.value)!;
+    const serviceChanged = next.serviceSlug !== service.slug;
     const previousTime = next.startTime;
-    next.serviceSlug = service?.slug;
-    next.serviceName = service?.name;
+    next.serviceSlug = service.slug;
+    next.serviceName = service.name;
     if (serviceChanged) {
-      if (!turn.mentioned.time && previousTime) next.requestedTime = previousTime;
+      if (turn.time.status !== "valid" && previousTime) {
+        next.requestedTime = previousTime;
+      }
       next.startTime = undefined;
       next.availableSlots = undefined;
     }
   }
 
-  if (turn.mentioned.date) {
-    const dateChanged = next.date !== (turn.date ?? undefined);
+  if (turn.date.status === "valid") {
+    const dateChanged = next.date !== turn.date.value;
     const previousTime = next.startTime;
-    next.date = turn.date ?? undefined;
+    next.date = turn.date.value!;
     if (dateChanged) {
-      if (!turn.mentioned.time && previousTime) next.requestedTime = previousTime;
+      if (turn.time.status !== "valid" && previousTime) {
+        next.requestedTime = previousTime;
+      }
       next.startTime = undefined;
       next.availableSlots = undefined;
     }
   }
 
-  if (turn.mentioned.time) {
-    next.requestedTime = turn.requestedTime ?? undefined;
+  if (turn.time.status === "valid") {
+    next.requestedTime = turn.time.value!;
     next.startTime = undefined;
   }
 
-  if (turn.mentioned.name) {
-    next.customerName = turn.customerName ?? undefined;
+  if (turn.name.status === "valid") {
+    next.customerName = turn.name.value!;
   } else if (!next.customerName && knownCustomerName) {
     next.customerName = knownCustomerName;
   }
@@ -197,40 +209,173 @@ export function mergeBookingAgentContext({
   return next;
 }
 
-async function saveConversation({
-  supabase,
+function isRpcUnavailable(error: { code?: string; message?: string } | null) {
+  return Boolean(
+    error &&
+      (error.code === "PGRST202" ||
+        error.code === "42883" ||
+        /function .* does not exist|schema cache/i.test(error.message ?? ""))
+  );
+}
+
+function mapConcurrencyError(error: { code?: string; message?: string }) {
+  if (
+    error.code === "40001" ||
+    /BOOKING_CONVERSATION_VERSION_CONFLICT/.test(error.message ?? "")
+  ) {
+    return new ConversationConflictError();
+  }
+  if (/BOOKING_CONVERSATION_STALE_EVENT/.test(error.message ?? "")) {
+    return new StaleConversationEventError();
+  }
+  return null;
+}
+
+async function claimInboundEvent({
+  input,
   businessId,
-  phoneE164,
+  occurredAt
+}: {
+  input: BookingAgentInput;
+  businessId: string;
+  occurredAt: Date;
+}): Promise<EventClaim> {
+  const { data, error } = await input.supabase.rpc("claim_booking_inbound_event", {
+    p_provider_message_id: input.messageSid,
+    p_business_id: businessId,
+    p_phone_e164: input.phoneE164,
+    p_channel: input.bookingChannel ?? "whatsapp",
+    p_provider_occurred_at: occurredAt.toISOString()
+  });
+  if (isRpcUnavailable(error)) return { mode: "legacy" };
+  if (error) throw new Error(`BOOKING_AGENT_EVENT_CLAIM_FAILED:${error.code}`);
+  const row = Array.isArray(data) ? data[0] : data;
+  const status = row?.claim_status;
+  if (status === "claimed") return { mode: "durable", status };
+  if (status === "duplicate" || status === "busy") {
+    return {
+      mode: "durable",
+      status,
+      response: typeof row?.response_text === "string" ? row.response_text : ""
+    };
+  }
+  throw new Error("BOOKING_AGENT_EVENT_CLAIM_FAILED:EMPTY");
+}
+
+async function failInboundEvent(input: BookingAgentInput, claim: EventClaim, error: unknown) {
+  if (claim.mode !== "durable" || claim.status !== "claimed") return;
+  const failureCode = error instanceof Error ? error.message.split(":")[0] : "UNKNOWN";
+  const { error: rpcError } = await input.supabase.rpc("fail_booking_inbound_event", {
+    p_provider_message_id: input.messageSid,
+    p_error_code: failureCode.slice(0, 80)
+  });
+  if (rpcError) {
+    console.error("booking_agent_event_failure_record_failed", {
+      messageId: input.messageSid,
+      code: rpcError.code
+    });
+  }
+}
+
+async function loadConversation({
+  input,
+  businessId,
+  durable
+}: {
+  input: BookingAgentInput;
+  businessId: string;
+  durable: boolean;
+}) {
+  if (durable) {
+    const { data, error } = await input.supabase.rpc("get_booking_conversation", {
+      p_business_id: businessId,
+      p_phone_e164: input.phoneE164
+    });
+    if (error) {
+      throw new Error(`BOOKING_AGENT_CONVERSATION_READ_FAILED:${error.code}`);
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return (row ?? null) as ConversationRow | null;
+  }
+
+  const { data, error } = await input.supabase
+    .from("whatsapp_conversations")
+    .select("state, context, last_message_sid, last_response_text, expires_at")
+    .eq("business_id", businessId)
+    .eq("phone_e164", input.phoneE164)
+    .maybeSingle();
+  if (error) throw new Error(`BOOKING_AGENT_CONVERSATION_READ_FAILED:${error.code}`);
+  if (!data) return null;
+  return { ...(data as Omit<ConversationRow, "version" | "last_event_order_key">), version: 0, last_event_order_key: null };
+}
+
+async function saveConversation({
+  input,
+  businessId,
+  expectedVersion,
+  eventOrderKey,
+  durable,
   state,
   context,
-  messageSid,
   response,
   now
 }: {
-  supabase: SupabaseClient;
+  input: BookingAgentInput;
   businessId: string;
-  phoneE164: string;
+  expectedVersion: number;
+  eventOrderKey: string;
+  durable: boolean;
   state: ConversationState;
   context: BookingAgentContext;
-  messageSid: string;
   response: string;
   now: Date;
 }) {
-  const { error } = await supabase.from("whatsapp_conversations").upsert(
-    {
-      business_id: businessId,
-      phone_e164: phoneE164,
-      state,
-      context,
-      last_message_sid: messageSid,
-      last_response_text: response,
-      expires_at: new Date(now.getTime() + CONVERSATION_TTL_MS).toISOString()
-    },
-    { onConflict: "business_id,phone_e164" }
-  );
-
-  if (error) throw new Error(`BOOKING_AGENT_CONVERSATION_SAVE_FAILED:${error.code}`);
+  const expiresAt = new Date(now.getTime() + CONVERSATION_TTL_MS).toISOString();
+  if (durable) {
+    const { error } = await input.supabase.rpc("save_booking_conversation", {
+      p_business_id: businessId,
+      p_phone_e164: input.phoneE164,
+      p_expected_version: expectedVersion,
+      p_event_order_key: eventOrderKey,
+      p_state: state,
+      p_context: context,
+      p_provider_message_id: input.messageSid,
+      p_response_text: response,
+      p_expires_at: expiresAt
+    });
+    if (error) {
+      const concurrencyError = mapConcurrencyError(error);
+      if (concurrencyError) throw concurrencyError;
+      throw new Error(`BOOKING_AGENT_CONVERSATION_SAVE_FAILED:${error.code}`);
+    }
+  } else {
+    const { error } = await input.supabase.from("whatsapp_conversations").upsert(
+      {
+        business_id: businessId,
+        phone_e164: input.phoneE164,
+        state,
+        context,
+        last_message_sid: input.messageSid,
+        last_response_text: response,
+        expires_at: expiresAt
+      },
+      { onConflict: "business_id,phone_e164" }
+    );
+    if (error) throw new Error(`BOOKING_AGENT_CONVERSATION_SAVE_FAILED:${error.code}`);
+  }
   return { response, duplicate: false } satisfies BookingAgentResult;
+}
+
+async function completeStaleEvent(
+  input: BookingAgentInput,
+  response: string
+): Promise<BookingAgentResult> {
+  const { error } = await input.supabase.rpc("complete_booking_inbound_event", {
+    p_provider_message_id: input.messageSid,
+    p_response_text: response
+  });
+  if (error) throw new Error(`BOOKING_AGENT_EVENT_COMPLETE_FAILED:${error.code}`);
+  return { response, duplicate: true };
 }
 
 async function getAvailability({
@@ -255,36 +400,29 @@ async function getAvailability({
     p_phone_e164: phoneE164,
     p_resource_slug: resourceSlug
   });
-
   if (error) throw new Error(`BOOKING_AGENT_AVAILABILITY_FAILED:${error.code}`);
   return ((data ?? []) as AvailabilitySlot[]).map((slot) => slot.slot_time);
 }
 
 async function findAlternativeDays({
-  supabase,
-  businessSlug,
-  resourceSlug,
+  input,
   serviceSlug,
-  date,
-  phoneE164
+  date
 }: {
-  supabase: SupabaseClient;
-  businessSlug: string;
-  resourceSlug: string;
+  input: BookingAgentInput;
   serviceSlug: string;
   date: string;
-  phoneE164: string;
 }) {
   const alternatives: Array<{ date: string; slots: string[] }> = [];
   for (let offset = 1; offset <= ALTERNATIVE_DAY_LOOKAHEAD; offset += 1) {
     const candidateDate = addDays(date, offset);
     const slots = await getAvailability({
-      supabase,
-      businessSlug,
-      resourceSlug,
+      supabase: input.supabase,
+      businessSlug: input.businessSlug,
+      resourceSlug: input.resourceSlug,
       serviceSlug,
       date: candidateDate,
-      phoneE164
+      phoneE164: input.phoneE164
     });
     if (slots.length > 0) alternatives.push({ date: candidateDate, slots });
     if (alternatives.length === 2) break;
@@ -298,279 +436,214 @@ function bookingSummary(context: BookingAgentContext) {
   }\nNome: ${context.customerName}`;
 }
 
-async function runNaturalBookingAgent(
-  input: BookingAgentInput,
-  turn: BookingAgentTurn
-): Promise<BookingAgentResult> {
-  const {
-    supabase,
-    businessSlug,
-    resourceSlug,
-    phoneE164,
-    body,
-    messageSid,
-    bookingChannel = "whatsapp",
-    externalReferencePrefix = "assistant",
-    now = new Date()
-  } = input;
+function invalidClarification(
+  fields: ReturnType<typeof invalidBookingFields>,
+  context: BookingAgentContext,
+  services: ServiceOption[]
+) {
+  const labels = fields.map((field) => {
+    if (field === "service") return "il servizio";
+    if (field === "date") return "la data";
+    if (field === "time") return "l’orario";
+    return "il nome";
+  });
+  const retained = [
+    context.serviceName,
+    context.date ? formatItalianDate(context.date) : null,
+    context.startTime ? `ore ${context.startTime}` : null,
+    context.customerName
+  ].filter(Boolean);
+  const serviceHint = fields.includes("service")
+    ? ` I servizi disponibili sono: ${services.map((service) => service.name).join(", ")}.`
+    : "";
+  return `Non ho capito ${labels.join(" e ")}. Conservo i dati già validi${
+    retained.length ? ` (${retained.join(", ")})` : ""
+  }. Puoi indicarmi di nuovo ${labels.join(" e ")}?${serviceHint}`;
+}
 
-  const { data: business, error: businessError } = await supabase
-    .from("businesses")
-    .select("id")
-    .eq("slug", businessSlug)
-    .eq("active", true)
-    .single();
-  if (businessError || !business) {
-    throw new Error(`BOOKING_AGENT_BUSINESS_FAILED:${businessError?.code ?? "NOT_FOUND"}`);
-  }
-  const businessId = business.id as string;
-
-  const { data: storedConversation, error: conversationError } = await supabase
-    .from("whatsapp_conversations")
-    .select("state, context, last_message_sid, last_response_text, expires_at")
-    .eq("business_id", businessId)
-    .eq("phone_e164", phoneE164)
-    .maybeSingle();
-  if (conversationError) {
-    throw new Error(`BOOKING_AGENT_CONVERSATION_READ_FAILED:${conversationError.code}`);
-  }
-  const previous = storedConversation as ConversationRow | null;
-  if (previous?.last_message_sid === messageSid && previous.last_response_text) {
-    return { response: previous.last_response_text, duplicate: true };
-  }
-
-  const { data: servicesData, error: servicesError } = await supabase
-    .from("services")
-    .select("name, slug, duration_minutes, price_cents")
-    .eq("business_id", businessId)
-    .eq("active", true)
-    .order("sort_order", { ascending: true });
-  if (servicesError) throw new Error(`BOOKING_AGENT_SERVICES_FAILED:${servicesError.code}`);
-  const services = (servicesData ?? []) as ServiceOption[];
-
-  if (turn.intent === "cancel") {
-    return saveConversation({
-      supabase,
+async function runNaturalBookingAgent({
+  input,
+  turn,
+  businessId,
+  previous,
+  services,
+  knownCustomerName,
+  durable,
+  eventOrderKey,
+  now
+}: {
+  input: BookingAgentInput;
+  turn: BookingAgentTurn;
+  businessId: string;
+  previous: ConversationRow | null;
+  services: ServiceOption[];
+  knownCustomerName?: string;
+  durable: boolean;
+  eventOrderKey: string;
+  now: Date;
+}): Promise<BookingAgentResult> {
+  const expectedVersion = previous?.version ?? 0;
+  const respond = (
+    state: ConversationState,
+    context: BookingAgentContext,
+    response: string
+  ) =>
+    saveConversation({
+      input,
       businessId,
-      phoneE164,
-      state: "idle",
-      context: {},
-      messageSid,
-      response: "Va bene, ho annullato la richiesta. Quando vuoi possiamo ripartire.",
+      expectedVersion,
+      eventOrderKey,
+      durable,
+      state,
+      context,
+      response,
       now
     });
-  }
 
   const current =
     previous && !isExpired(previous.expires_at, now) && previous.context
       ? previous.context
       : {};
-  const { data: customer, error: customerError } = await supabase
-    .from("customers")
-    .select("name")
-    .eq("business_id", businessId)
-    .eq("phone_e164", phoneE164)
-    .maybeSingle();
-  if (customerError) throw new Error(`BOOKING_AGENT_CUSTOMER_FAILED:${customerError.code}`);
+
+  if (turn.intent === "cancel_existing_booking") {
+    return respond(
+      contextHasValues(current) ? stateForContext(current) : "idle",
+      current,
+      "Non posso ancora cancellare un appuntamento già confermato da qui. Ti passo all’operatore: nel frattempo non ho modificato né cancellato alcun appuntamento."
+    );
+  }
+  if (turn.intent === "abort_booking") {
+    return respond(
+      "idle",
+      {},
+      "Va bene, ho abbandonato la richiesta di prenotazione in corso. Nessun appuntamento esistente è stato cancellato."
+    );
+  }
 
   let context = mergeBookingAgentContext({
     current,
     turn,
     services,
-    knownCustomerName: customer?.name as string | undefined
+    knownCustomerName
   });
+  const invalidFields = invalidBookingFields(turn);
+  if (invalidFields.length > 0) {
+    return respond(
+      stateForContext(context),
+      context,
+      invalidClarification(invalidFields, context, services)
+    );
+  }
+
   const changed = turnChangesBooking(turn);
-
   if (turn.intent === "other" && !contextHasValues(context)) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "idle",
-      context: {},
-      messageSid,
-      response:
-        "Ciao! Posso aiutarti a prenotare da Studio Barber 8. Dimmi pure servizio, giorno e orario, anche tutti nella stessa frase.",
-      now
-    });
+    return respond(
+      "idle",
+      {},
+      "Ciao! Posso aiutarti a prenotare da Studio Barber 8. Dimmi pure servizio, giorno e orario, anche tutti nella stessa frase."
+    );
   }
-
   if (services.length === 0) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "idle",
-      context: {},
-      messageSid,
-      response: "Al momento non ci sono servizi prenotabili. Riprova più tardi.",
-      now
-    });
+    return respond(
+      "idle",
+      {},
+      "Al momento non ci sono servizi prenotabili. Riprova più tardi."
+    );
   }
-
   if (!context.serviceSlug) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_service",
+    return respond(
+      "awaiting_service",
       context,
-      messageSid,
-      response: `Quale servizio preferisci?\n\n${formatServiceList(services)}`,
-      now
-    });
+      `Quale servizio preferisci?\n\n${formatServiceList(services)}`
+    );
   }
-
   if (!context.date) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_date",
+    return respond(
+      "awaiting_date",
       context,
-      messageSid,
-      response: `Perfetto, ${context.serviceName}. Per quale giorno vuoi venire?`,
-      now
-    });
+      `Perfetto, ${context.serviceName}. Per quale giorno vuoi venire?`
+    );
   }
 
   const serviceSlug = context.serviceSlug;
   const bookingDate = context.date;
-
   let slots = await getAvailability({
-    supabase,
-    businessSlug,
-    resourceSlug,
+    supabase: input.supabase,
+    businessSlug: input.businessSlug,
+    resourceSlug: input.resourceSlug,
     serviceSlug,
     date: bookingDate,
-    phoneE164
+    phoneE164: input.phoneE164
   });
   context = { ...context, availableSlots: slots };
 
   if (slots.length === 0) {
-    const alternatives = await findAlternativeDays({
-      supabase,
-      businessSlug,
-      resourceSlug,
-      serviceSlug,
-      date: bookingDate,
-      phoneE164
-    });
+    const alternatives = await findAlternativeDays({ input, serviceSlug, date: bookingDate });
     const alternativeText = alternatives.length
       ? ` Le prime alternative sono ${alternatives
-          .map(
-            (item) =>
-              `${formatItalianDate(item.date)}: ${formatSlotList(item.slots)}`
-          )
+          .map((item) => `${formatItalianDate(item.date)}: ${formatSlotList(item.slots)}`)
           .join("; ")}.`
       : " Indicami un altro giorno e controllo subito.";
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_date",
-      context: {
+    return respond(
+      "awaiting_date",
+      {
         ...context,
         startTime: undefined,
         requestedTime: undefined,
         confirmationPending: false
       },
-      messageSid,
-      response: `Non risultano orari liberi per ${formatItalianDate(
-        bookingDate
-      )}.${alternativeText}`,
-      now
-    });
+      `Non risultano orari liberi per ${formatItalianDate(bookingDate)}.${alternativeText}`
+    );
   }
 
-  const requestedTime = context.requestedTime;
-  if (requestedTime) {
+  if (context.requestedTime) {
+    const requestedTime = context.requestedTime;
     if (slots.includes(requestedTime)) {
       context = { ...context, startTime: requestedTime, requestedTime: undefined };
     } else {
-      const alternatives = nearestAvailableSlots(slots, requestedTime);
-      return saveConversation({
-        supabase,
-        businessId,
-        phoneE164,
-        state: "awaiting_slot",
-        context: {
+      return respond(
+        "awaiting_slot",
+        {
           ...context,
           requestedTime: undefined,
           startTime: undefined,
           confirmationPending: false
         },
-        messageSid,
-        response: `Alle ${requestedTime} non è libero. Gli orari più vicini disponibili sono ${formatSlotList(
-          alternatives
-        )}. Quale preferisci?`,
-        now
-      });
+        `Alle ${requestedTime} non è libero. Gli orari più vicini disponibili sono ${formatSlotList(
+          nearestAvailableSlots(slots, requestedTime)
+        )}. Quale preferisci?`
+      );
     }
   } else if (context.startTime && !slots.includes(context.startTime)) {
-    const alternatives = nearestAvailableSlots(slots, context.startTime);
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_slot",
-      context: {
-        ...context,
-        startTime: undefined,
-        confirmationPending: false
-      },
-      messageSid,
-      response: `L’orario delle ${context.startTime} non è più libero. Posso proporti ${formatSlotList(
-        alternatives
-      )}. Quale scegli?`,
-      now
-    });
+    const previousTime = context.startTime;
+    return respond(
+      "awaiting_slot",
+      { ...context, startTime: undefined, confirmationPending: false },
+      `L’orario delle ${previousTime} non è più libero. Posso proporti ${formatSlotList(
+        nearestAvailableSlots(slots, previousTime)
+      )}. Quale scegli?`
+    );
   }
 
   if (!context.startTime) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_slot",
+    return respond(
+      "awaiting_slot",
       context,
-      messageSid,
-      response: `Per ${formatItalianDate(bookingDate)} sono disponibili: ${formatSlotList(
+      `Per ${formatItalianDate(bookingDate)} sono disponibili: ${formatSlotList(
         slots
-      )}. A che ora preferisci?`,
-      now
-    });
+      )}. A che ora preferisci?`
+    );
   }
-
-  const startTime = context.startTime;
-
   if (!context.customerName) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_name",
-      context,
-      messageSid,
-      response: "A che nome registro l’appuntamento?",
-      now
-    });
+    return respond("awaiting_name", context, "A che nome registro l’appuntamento?");
   }
-
-  const customerName = context.customerName;
 
   if (turn.confirmation === "reject" && !changed) {
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "awaiting_confirmation",
-      context: { ...context, confirmationPending: true },
-      messageSid,
-      response:
-        "Nessun problema. Cosa vuoi cambiare: servizio, giorno, orario o nome?",
-      now
-    });
+    return respond(
+      "awaiting_confirmation",
+      { ...context, confirmationPending: true },
+      "Nessun problema. Cosa vuoi cambiare: servizio, giorno, orario o nome?"
+    );
   }
 
   if (
@@ -578,95 +651,109 @@ async function runNaturalBookingAgent(
     current.confirmationPending === true &&
     !changed
   ) {
-    const { data, error } = await supabase.rpc("create_public_booking", {
-      p_business_slug: businessSlug,
-      p_service_slug: serviceSlug,
-      p_date: bookingDate,
-      p_start_time: startTime,
-      p_customer_name: customerName,
-      p_phone_e164: phoneE164,
-      p_channel: bookingChannel,
-      p_notes:
-        bookingChannel === "voice"
-          ? "Prenotazione gestita dall’agente conversazionale vocale."
-          : "Prenotazione gestita dall’agente conversazionale WhatsApp.",
-      p_external_reference: messageSid.startsWith(`${externalReferencePrefix}:`)
-        ? messageSid
-        : `${externalReferencePrefix}:${messageSid}`,
-      p_resource_slug: resourceSlug
-    });
-
+    const response = `Appuntamento confermato ✅\n\n${bookingSummary(
+      context
+    )}\n\nTi aspettiamo da Studio Barber 8!`;
+    const externalReferencePrefix = input.externalReferencePrefix ?? "assistant";
+    const externalReference = input.messageSid.startsWith(`${externalReferencePrefix}:`)
+      ? input.messageSid
+      : `${externalReferencePrefix}:${input.messageSid}`;
+    const rpcName = durable
+      ? "confirm_booking_conversation"
+      : "create_public_booking";
+    const rpcArgs = durable
+      ? {
+          p_business_id: businessId,
+          p_phone_e164: input.phoneE164,
+          p_expected_version: expectedVersion,
+          p_event_order_key: eventOrderKey,
+          p_provider_message_id: input.messageSid,
+          p_response_text: response,
+          p_expires_at: new Date(now.getTime() + CONVERSATION_TTL_MS).toISOString(),
+          p_business_slug: input.businessSlug,
+          p_service_slug: serviceSlug,
+          p_date: bookingDate,
+          p_start_time: context.startTime,
+          p_customer_name: context.customerName,
+          p_channel: input.bookingChannel ?? "whatsapp",
+          p_notes:
+            (input.bookingChannel ?? "whatsapp") === "voice"
+              ? "Prenotazione gestita dall’agente conversazionale vocale."
+              : "Prenotazione gestita dall’agente conversazionale WhatsApp.",
+          p_external_reference: externalReference,
+          p_resource_slug: input.resourceSlug
+        }
+      : {
+          p_business_slug: input.businessSlug,
+          p_service_slug: serviceSlug,
+          p_date: bookingDate,
+          p_start_time: context.startTime,
+          p_customer_name: context.customerName,
+          p_phone_e164: input.phoneE164,
+          p_channel: input.bookingChannel ?? "whatsapp",
+          p_notes:
+            (input.bookingChannel ?? "whatsapp") === "voice"
+              ? "Prenotazione gestita dall’agente conversazionale vocale."
+              : "Prenotazione gestita dall’agente conversazionale WhatsApp.",
+          p_external_reference: externalReference,
+          p_resource_slug: input.resourceSlug
+        };
+    const { data, error } = await input.supabase.rpc(rpcName, rpcArgs);
     if (error) {
-      if (error.code === "23P01" || error.message.includes("SLOT_NOT_AVAILABLE")) {
+      const concurrencyError = mapConcurrencyError(error);
+      if (concurrencyError) throw concurrencyError;
+      if (error.code === "23P01" || /SLOT_NOT_AVAILABLE/.test(error.message ?? "")) {
         slots = await getAvailability({
-          supabase,
-          businessSlug,
-          resourceSlug,
+          supabase: input.supabase,
+          businessSlug: input.businessSlug,
+          resourceSlug: input.resourceSlug,
           serviceSlug,
           date: bookingDate,
-          phoneE164
+          phoneE164: input.phoneE164
         });
         const alternatives = slots.length
-          ? nearestAvailableSlots(slots, startTime)
+          ? nearestAvailableSlots(slots, context.startTime)
           : [];
-        return saveConversation({
-          supabase,
-          businessId,
-          phoneE164,
-          state: slots.length ? "awaiting_slot" : "awaiting_date",
-          context: {
+        return respond(
+          slots.length ? "awaiting_slot" : "awaiting_date",
+          {
             ...context,
             availableSlots: slots,
             startTime: undefined,
             confirmationPending: false
           },
-          messageSid,
-          response: alternatives.length
+          alternatives.length
             ? `Quell’orario è stato appena occupato. Ora sono disponibili ${formatSlotList(
                 alternatives
               )}. Quale preferisci?`
-            : "Quell’orario è stato appena occupato e il giorno è ora pieno. Indicami un altro giorno.",
-          now
-        });
+            : "Quell’orario è stato appena occupato e il giorno è ora pieno. Indicami un altro giorno."
+        );
       }
       throw new Error(`BOOKING_AGENT_BOOKING_FAILED:${error.code}`);
     }
-
-    const appointment = Array.isArray(data) ? data[0] : null;
+    const appointment = Array.isArray(data) ? data[0] : data;
     if (!appointment) throw new Error("BOOKING_AGENT_BOOKING_FAILED:EMPTY");
-    return saveConversation({
-      supabase,
-      businessId,
-      phoneE164,
-      state: "idle",
-      context: {},
-      messageSid,
-      response: `Appuntamento confermato ✅\n\n${bookingSummary(context)}\n\nTi aspettiamo da Studio Barber 8!`,
-      now
-    });
+    if (durable) return { response, duplicate: false };
+    return respond("idle", {}, response);
   }
 
   context = { ...context, confirmationPending: true };
-  return saveConversation({
-    supabase,
-    businessId,
-    phoneE164,
-    state: stateForContext(context),
+  return respond(
+    "awaiting_confirmation",
     context,
-    messageSid,
-    response: `Ti riepilogo:\n\n${bookingSummary(
+    `Ti riepilogo:\n\n${bookingSummary(
       context
-    )}\n\nConfermi? Rispondi sì per creare la prenotazione, oppure dimmi cosa vuoi cambiare.`,
-    now
-  });
+    )}\n\nConfermi? Rispondi sì per creare la prenotazione, oppure dimmi cosa vuoi cambiare.`
+  );
 }
 
 export async function handleBookingAgentMessage(
   input: BookingAgentInput,
   dependencies: BookingAgentDependencies = {}
 ): Promise<BookingAgentResult> {
-  const interpretTurn = dependencies.interpretTurn ?? interpretBookingAgentTurn;
-
+  const now = input.now ?? new Date();
+  const occurredAt = input.occurredAt ?? now;
+  const eventOrderKey = `${occurredAt.toISOString()}|${input.messageSid}`;
   const { data: business, error: businessError } = await input.supabase
     .from("businesses")
     .select("id")
@@ -677,49 +764,72 @@ export async function handleBookingAgentMessage(
     throw new Error(`BOOKING_AGENT_BUSINESS_FAILED:${businessError?.code ?? "NOT_FOUND"}`);
   }
   const businessId = business.id as string;
-
-  const [{ data: servicesData, error: servicesError }, { data: storedConversation, error: conversationError }] =
-    await Promise.all([
-      input.supabase
-        .from("services")
-        .select("name, slug, duration_minutes, price_cents")
-        .eq("business_id", businessId)
-        .eq("active", true)
-        .order("sort_order", { ascending: true }),
-      input.supabase
-        .from("whatsapp_conversations")
-        .select("state, context, last_message_sid, last_response_text, expires_at")
-        .eq("business_id", businessId)
-        .eq("phone_e164", input.phoneE164)
-        .maybeSingle()
-    ]);
-  if (servicesError) throw new Error(`BOOKING_AGENT_SERVICES_FAILED:${servicesError.code}`);
-  if (conversationError) {
-    throw new Error(`BOOKING_AGENT_CONVERSATION_READ_FAILED:${conversationError.code}`);
+  const claim = await claimInboundEvent({ input, businessId, occurredAt });
+  if (claim.mode === "durable" && claim.status !== "claimed") {
+    return { response: claim.response, duplicate: true };
   }
+  const durable = claim.mode === "durable";
 
-  const previous = storedConversation as ConversationRow | null;
-  if (previous?.last_message_sid === input.messageSid && previous.last_response_text) {
-    return { response: previous.last_response_text, duplicate: true };
-  }
-  const now = input.now ?? new Date();
-  const context =
-    previous && !isExpired(previous.expires_at, now) && previous.context
-      ? previous.context
-      : {};
-  const services = (servicesData ?? []) as ServiceOption[];
-  const turn = await interpretTurn({
-    body: input.body,
-    context,
-    services,
-    now
-  });
+  try {
+    for (let attempt = 0; attempt < MAX_CONVERSATION_RETRIES; attempt += 1) {
+      const [servicesResult, conversation, customerResult] = await Promise.all([
+        input.supabase
+          .from("services")
+          .select("name, slug, duration_minutes, price_cents")
+          .eq("business_id", businessId)
+          .eq("active", true)
+          .order("sort_order", { ascending: true }),
+        loadConversation({ input, businessId, durable }),
+        input.supabase
+          .from("customers")
+          .select("name")
+          .eq("business_id", businessId)
+          .eq("phone_e164", input.phoneE164)
+          .maybeSingle()
+      ]);
+      if (servicesResult.error) {
+        throw new Error(`BOOKING_AGENT_SERVICES_FAILED:${servicesResult.error.code}`);
+      }
+      if (customerResult.error) {
+        throw new Error(`BOOKING_AGENT_CUSTOMER_FAILED:${customerResult.error.code}`);
+      }
+      const services = (servicesResult.data ?? []) as ServiceOption[];
+      const context =
+        conversation && !isExpired(conversation.expires_at, now) && conversation.context
+          ? conversation.context
+          : {};
+      const interpretTurn = dependencies.interpretTurn ?? interpretBookingAgentTurn;
+      let turn = await interpretTurn({ body: input.body, context, services, now });
+      if (!turn) {
+        const fallback =
+          dependencies.interpretFallbackTurn ?? interpretDeterministicBookingTurn;
+        turn = await fallback({ body: input.body, context, services, now });
+      }
 
-  if (!turn) {
-    const fallback =
-      dependencies.fallback ??
-      (await import("./whatsapp-assistant.ts")).handleBookingAssistantMessage;
-    return fallback(input);
+      try {
+        return await runNaturalBookingAgent({
+          input,
+          turn,
+          businessId,
+          previous: conversation,
+          services,
+          knownCustomerName: customerResult.data?.name as string | undefined,
+          durable,
+          eventOrderKey,
+          now
+        });
+      } catch (error) {
+        if (error instanceof ConversationConflictError) continue;
+        if (error instanceof StaleConversationEventError) {
+          const latest = await loadConversation({ input, businessId, durable });
+          return completeStaleEvent(input, latest?.last_response_text ?? "");
+        }
+        throw error;
+      }
+    }
+    throw new Error("BOOKING_AGENT_CONVERSATION_CONFLICT_RETRY_EXHAUSTED");
+  } catch (error) {
+    await failInboundEvent(input, claim, error);
+    throw error;
   }
-  return runNaturalBookingAgent(input, turn);
 }

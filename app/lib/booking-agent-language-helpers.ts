@@ -5,30 +5,34 @@ import {
 import type { ServiceOption } from "./whatsapp-assistant-helpers.ts";
 
 export type BookingAgentConfirmation = "none" | "confirm" | "reject";
+export type BookingAgentIntent =
+  | "booking"
+  | "abort_booking"
+  | "cancel_existing_booking"
+  | "other";
+export type BookingAgentFieldStatus = "not_mentioned" | "valid" | "invalid";
+
+export type BookingAgentField<T> = {
+  status: BookingAgentFieldStatus;
+  value: T | null;
+};
 
 export type BookingAgentTurn = {
-  intent: "booking" | "cancel" | "other";
-  serviceSlug: string | null;
-  date: string | null;
-  requestedTime: string | null;
-  customerName: string | null;
+  intent: BookingAgentIntent;
+  service: BookingAgentField<string>;
+  date: BookingAgentField<string>;
+  time: BookingAgentField<string>;
+  name: BookingAgentField<string>;
   confirmation: BookingAgentConfirmation;
-  mentioned: {
-    service: boolean;
-    date: boolean;
-    time: boolean;
-    name: boolean;
-  };
 };
 
 type BookingAgentTurnCandidate = {
   intent?: unknown;
-  service_slug?: unknown;
+  service?: unknown;
   date?: unknown;
   time?: unknown;
-  customer_name?: unknown;
+  name?: unknown;
   confirmation?: unknown;
-  mentioned?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -63,6 +67,32 @@ function validateCustomerName(value: unknown) {
   return name.length >= 2 && name.length <= 160 ? name : null;
 }
 
+function validateField<T>(
+  value: unknown,
+  validator: (candidate: unknown) => T | null
+): BookingAgentField<T> | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.status !== "not_mentioned" &&
+    value.status !== "valid" &&
+    value.status !== "invalid"
+  ) {
+    return null;
+  }
+
+  if (value.status === "not_mentioned") {
+    return value.value === null ? { status: "not_mentioned", value: null } : null;
+  }
+  if (value.status === "invalid") {
+    return { status: "invalid", value: null };
+  }
+
+  const validated = validator(value.value);
+  return validated === null
+    ? { status: "invalid", value: null }
+    : { status: "valid", value: validated };
+}
+
 export function validateBookingAgentTurn({
   value,
   services,
@@ -76,7 +106,8 @@ export function validateBookingAgentTurn({
   const candidate = value as BookingAgentTurnCandidate;
   if (
     candidate.intent !== "booking" &&
-    candidate.intent !== "cancel" &&
+    candidate.intent !== "abort_booking" &&
+    candidate.intent !== "cancel_existing_booking" &&
     candidate.intent !== "other"
   ) {
     return null;
@@ -88,36 +119,41 @@ export function validateBookingAgentTurn({
   ) {
     return null;
   }
-  if (!isRecord(candidate.mentioned)) return null;
 
-  const mentioned = {
-    service: candidate.mentioned.service === true,
-    date: candidate.mentioned.date === true,
-    time: candidate.mentioned.time === true,
-    name: candidate.mentioned.name === true
-  };
-
-  const service =
-    typeof candidate.service_slug === "string"
-      ? services.find((item) => item.slug === candidate.service_slug) ?? null
-      : null;
+  const service = validateField(candidate.service, (serviceSlug) =>
+    typeof serviceSlug === "string" &&
+    services.some((item) => item.slug === serviceSlug)
+      ? serviceSlug
+      : null
+  );
+  const date = validateField(candidate.date, (dateValue) =>
+    validateIsoDate(dateValue, now)
+  );
+  const time = validateField(candidate.time, validateTime);
+  const name = validateField(candidate.name, validateCustomerName);
+  if (!service || !date || !time || !name) return null;
 
   return {
     intent: candidate.intent,
-    serviceSlug: service?.slug ?? null,
-    date: validateIsoDate(candidate.date, now),
-    requestedTime: validateTime(candidate.time),
-    customerName: validateCustomerName(candidate.customer_name),
-    confirmation: candidate.confirmation,
-    mentioned
+    service,
+    date,
+    time,
+    name,
+    confirmation: candidate.confirmation
   };
 }
 
 export function turnChangesBooking(turn: BookingAgentTurn) {
-  return (
-    turn.mentioned.service ||
-    turn.mentioned.date ||
-    turn.mentioned.time ||
-    turn.mentioned.name
+  return [turn.service, turn.date, turn.time, turn.name].some(
+    (field) => field.status === "valid"
   );
+}
+
+export function invalidBookingFields(turn: BookingAgentTurn) {
+  const fields: Array<"service" | "date" | "time" | "name"> = [];
+  if (turn.service.status === "invalid") fields.push("service");
+  if (turn.date.status === "invalid") fields.push("date");
+  if (turn.time.status === "invalid") fields.push("time");
+  if (turn.name.status === "invalid") fields.push("name");
+  return fields;
 }

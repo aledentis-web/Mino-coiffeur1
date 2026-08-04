@@ -20,43 +20,37 @@ type ResponsesPayload = {
   }>;
 };
 
+const FIELD_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: {
+      type: "string",
+      enum: ["not_mentioned", "valid", "invalid"]
+    },
+    value: { type: ["string", "null"] }
+  },
+  required: ["status", "value"]
+} as const;
+
 const TURN_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     intent: {
       type: "string",
-      enum: ["booking", "cancel", "other"]
+      enum: ["booking", "abort_booking", "cancel_existing_booking", "other"]
     },
-    service_slug: { type: ["string", "null"] },
-    date: { type: ["string", "null"] },
-    time: { type: ["string", "null"] },
-    customer_name: { type: ["string", "null"] },
+    service: FIELD_SCHEMA,
+    date: FIELD_SCHEMA,
+    time: FIELD_SCHEMA,
+    name: FIELD_SCHEMA,
     confirmation: {
       type: "string",
       enum: ["none", "confirm", "reject"]
-    },
-    mentioned: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        service: { type: "boolean" },
-        date: { type: "boolean" },
-        time: { type: "boolean" },
-        name: { type: "boolean" }
-      },
-      required: ["service", "date", "time", "name"]
     }
   },
-  required: [
-    "intent",
-    "service_slug",
-    "date",
-    "time",
-    "customer_name",
-    "confirmation",
-    "mentioned"
-  ]
+  required: ["intent", "service", "date", "time", "name", "confirmation"]
 } as const;
 
 function extractOutputText(payload: ResponsesPayload) {
@@ -110,12 +104,10 @@ export async function interpretBookingAgentTurn({
                 type: "input_text",
                 text:
                   "Estrai i dati da un singolo messaggio rivolto al segretario di un barbiere italiano. " +
-                  "Il cliente può fornire servizio, data, ora e nome insieme, oppure correggere dati già presenti. " +
-                  "Usa soltanto gli slug dell'elenco servizi. Converti le date in YYYY-MM-DD usando today_rome e gli orari in HH:MM. " +
-                  "Imposta mentioned.* a true soltanto quando quel dato è espresso o corretto nel nuovo messaggio. " +
-                  "Non copiare il contesto precedente nei campi estratti se il cliente non lo ha ripetuto. " +
-                  "confirmation=confirm richiede un sì esplicito; reject indica che il cliente non conferma ma non annulla necessariamente. " +
-                  "intent=cancel soltanto quando chiede esplicitamente di annullare o interrompere tutto. Non inventare mai dati."
+                  "Per ciascun campo usa status=not_mentioned se non compare, valid se è compreso e valido, invalid se il cliente prova a indicarlo o correggerlo ma non è comprensibile o valido. " +
+                  "Con status not_mentioned o invalid usa value=null. Con valid usa soltanto gli slug dell'elenco servizi, date YYYY-MM-DD basate su today_rome e orari HH:MM. " +
+                  "Non copiare il contesto precedente nei campi non ripetuti. confirmation=confirm richiede un sì esplicito; reject indica rifiuto del riepilogo. " +
+                  "intent=abort_booking solo per abbandonare la richiesta in corso. intent=cancel_existing_booking quando chiede di cancellare un appuntamento già fissato. Non inventare dati."
               }
             ]
           },
@@ -160,9 +152,7 @@ export async function interpretBookingAgentTurn({
     });
 
     if (!response.ok) {
-      console.warn("openai_booking_agent_rejected", {
-        status: response.status
-      });
+      console.warn("openai_booking_agent_rejected", { status: response.status });
       return null;
     }
 

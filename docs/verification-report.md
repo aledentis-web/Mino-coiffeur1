@@ -1,32 +1,67 @@
-# Verification report — agente conversazionale condiviso
+# Verification report — hardening booking agent condiviso
 
-Data: 3 agosto 2026
+Data: 4 agosto 2026
 
-## Storia verificata
+## Risultato della milestone
 
-Il cliente usa il laboratorio vocale protetto o WhatsApp Meta. Lo stesso agente
-estrae più dati da una frase, conserva il contesto, applica correzioni, consulta
-la disponibilità reale e richiede una conferma esplicita prima di scrivere
-atomicamente la prenotazione nell'agenda Supabase.
+Browser amministrativo e webhook WhatsApp continuano a usare lo stesso motore
+conversazionale. Il fallback deterministico ora produce lo stesso modello di
+turno del percorso OpenAI e passa dallo stesso merge, dalla stessa verifica di
+disponibilità e dalla stessa persistenza.
 
-## Confini del flusso
+Il modello distingue per servizio, data, orario e nome tre casi: campo non
+menzionato, campo valido e tentativo non compreso/non valido. Un tentativo non
+valido conserva il valore precedente e genera una richiesta di chiarimento.
 
-| Confine | Stato | Evidenza |
-| --- | --- | --- |
-| UI pubblica | Superato | `/` risponde `200` e contiene il brand Studio Barber |
-| Laboratorio vocale | Superato | registrazione `MediaRecorder`, trascrizione OpenAI server-side e input manuale |
-| Login agenda | Superato | `/admin/login` risponde `200` |
-| Route stato admin | Superato | senza sessione risponde `401` |
-| Motore conversazionale | Superato | Structured Outputs multi-campo con fallback deterministico completo |
-| Contesto e correzioni | Superato | i dati persistono tra i messaggi e le modifiche non azzerano il flusso |
-| Dati autorevoli | Superato | servizi, date e slot sono convalidati e riletti tramite RPC Supabase |
-| Conferma | Superato | riepilogo obbligatorio e creazione soltanto dopo un sì esplicito |
-| Concorrenza | Superato | simulazione di 100 clienti senza sovrapposizioni |
-| Immagini Next.js | Superato | ottimizzazione Sharp `200`, output 640×334 e CSP restrittiva |
-| Supabase security advisor | Superato | nessun rilievo di sicurezza |
-| Dipendenze runtime | Superato | `npm audit --omit=dev` restituisce zero vulnerabilità |
+L'abbandono della richiesta corrente è separato dalla cancellazione di un
+appuntamento già esistente. Quest'ultima non è ancora implementata: l'agente lo
+dichiara esplicitamente e indirizza all'operatore senza modificare dati.
 
-## Comandi
+## Hardening di idempotenza e concorrenza
+
+È stata creata, ma **non applicata a nessun ambiente remoto**, la migration:
+
+`supabase/migrations/20260804122814_booking_agent_hardening.sql`
+
+La migration introduce:
+
+- `booking_inbound_events`, con `provider_message_id` univoco, stati
+  `processing/processed/failed`, tentativi e diagnostica di consegna;
+- una lease di cinque minuti per recuperare eventi rimasti in elaborazione;
+- `version` e `last_event_order_key` su `whatsapp_conversations`;
+- scrittura compare-and-set con retry applicativo sui conflitti;
+- rifiuto persistente dei messaggi fuori ordine;
+- conferma transazionale che crea la prenotazione tramite
+  `create_public_booking` e aggiorna conversazione/evento nella stessa
+  transazione;
+- RLS e privilegi RPC riservati a `service_role`.
+
+Finché la migration non viene applicata, il codice rileva l'assenza della RPC
+di claim e usa il percorso legacy. Questo evita di interrompere le Preview già
+attive, ma le nuove garanzie di concorrenza diventano effettive solo dopo una
+futura applicazione controllata della migration.
+
+## Test automatici aggiunti
+
+La suite copre ora:
+
+- frase unica con servizio, data, orario e nome;
+- correzioni non valide di servizio, data, orario e nome su contesto completo;
+- rifiuto e correzione dopo il riepilogo;
+- conversazione scaduta;
+- giornata piena e ricerca dei giorni alternativi;
+- webhook duplicato e idempotenza della prenotazione;
+- retry di un messaggio vecchio dopo uno più recente;
+- messaggio mai visto ma fuori ordine;
+- due messaggi concorrenti con conflitto CAS e retry senza perdita di contesto;
+- sequenza OpenAI → fallback deterministico → OpenAI;
+- slot occupato tra riepilogo e conferma;
+- errore della RPC di creazione e stato evento `failed`;
+- distinzione tra abbandono del flusso e cancellazione di un appuntamento;
+- contratto SQL del registro eventi, della versione e dei privilegi.
+
+Una GitHub Action in `.github/workflows/ci.yml` esegue su pull request e push
+del branch dello sprint, senza credenziali di produzione:
 
 ```bash
 npm ci
@@ -36,29 +71,41 @@ npm run build
 npm audit --omit=dev --audit-level=high
 ```
 
-Risultato dello sprint:
+Le stesse verifiche sono state eseguite localmente dopo un `npm ci`: typecheck
+superato, 60 test su 60 superati, build Next.js 16.2.12 superata, zero
+vulnerabilità runtime di livello high o superiore e `git diff --check` pulito.
+La scansione del diff e dei nuovi file non ha rilevato pattern di credenziali;
+`.env.local` resta ignorato da Git.
 
-- typecheck superato;
-- 43 test automatici superati;
-- build Next.js 16.2.12 superata;
-- nessun riferimento al provider precedente residuo;
-- nessuna credenziale rilevata nei file versionati;
-- nessuna vulnerabilità npm rilevata.
+## Rischi corretti
 
-## Verifiche live
+- Le correzioni non valide non azzerano più valori validi.
+- L'agente non dichiara più cancellato un appuntamento esistente.
+- `last_message_sid` non è più l'unico meccanismo di deduplicazione.
+- Retry vecchi, duplicati e messaggi fuori ordine non riscrivono il contesto.
+- Gli aggiornamenti concorrenti non usano più una strategia last-write-wins.
+- La creazione e la chiusura della conversazione sono atomiche nel percorso
+  hardening.
+- Le diagnostiche di consegna sono associate all'evento inbound, non soltanto
+  all'ultimo messaggio della conversazione.
 
-- La chiave locale dedicata ha superato uno smoke test reale della nuova
-  estrazione multi-campo sulla Responses API: servizio, data, ora e nome sono
-  stati restituiti correttamente. La chiave resta in `.env.local`, ignorata da
-  Git.
-- Un campione MP3 locale con la frase “Vorrei prenotare un taglio domani” ha
-  attraversato login amministrativo, route protetta e Audio API. La risposta
-  reale è stata “Vorrei prenotare un taglio domani.”.
-- Numero reale, verifica e sottoscrizione webhook Meta risultano configurati.
-  In questa sessione non è stato inviato un messaggio reale al cliente.
-- La telefonata reale richiede una decisione separata sul provider SIP
-  italiano.
-- Il runner dello sprint non ha potuto scaricare Chromium dal CDN per un errore
-  di certificato del proxy. Le route sono state verificate in modalità
-  production-like; lo screenshot e il test microfono interattivo vanno
-  ripetuti nel browser sulla preview della pull request.
+## Test manuali ancora necessari
+
+- Applicare la migration prima in un ambiente Supabase non produttivo e
+  verificare le RPC con due webhook reali concorrenti.
+- Verificare su Preview un messaggio WhatsApp reale, la risposta Meta e le
+  colonne di diagnostica dell'evento.
+- Ripetere nel browser Preview registrazione microfono, trascrizione e tre
+  turni alternando percorso OpenAI e fallback.
+- Verificare il passaggio all'operatore concordando il canale operativo reale;
+  in questa milestone il testo informa il cliente ma non apre un ticket.
+
+## Fuori dalla milestone
+
+- OpenAI Realtime, SIP e telefonate reali;
+- cancellazione o modifica reale di appuntamenti esistenti;
+- worker automatico di replay degli eventi `failed`;
+- ordinamento più preciso del secondo quando Meta consegna due eventi con lo
+  stesso timestamp: in quel caso l'ID provider fornisce un ordine stabile, non
+  necessariamente l'ordine di digitazione;
+- merge e deploy in produzione.

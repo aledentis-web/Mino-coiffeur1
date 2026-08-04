@@ -496,7 +496,8 @@ test("cancellare un appuntamento esistente non finge una cancellazione", async (
   const result = await handleBookingAgentMessage(input(db, "cancel-existing", "Cancella il mio appuntamento", new Date("2026-08-03T10:01:00Z")), {
     interpretTurn: async () => ({ ...confirmationTurn(), confirmation: "none", intent: "cancel_existing_booking" })
   });
-  assert.match(result.response, /Non posso ancora cancellare/);
+  assert.match(result.response, /Contatta direttamente il negozio/);
+  assert.doesNotMatch(result.response, /passo all.operatore/i);
   assert.match(result.response, /non ho modificato né cancellato/);
   assert.deepEqual(db.conversations.get(PHONE)!.context, before);
   assert.equal(db.bookings.length, 0);

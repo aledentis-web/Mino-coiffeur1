@@ -15,13 +15,19 @@ valido conserva il valore precedente e genera una richiesta di chiarimento.
 
 L'abbandono della richiesta corrente è separato dalla cancellazione di un
 appuntamento già esistente. Quest'ultima non è ancora implementata: l'agente lo
-dichiara esplicitamente e indirizza all'operatore senza modificare dati.
+dichiara esplicitamente e invita a contattare direttamente il negozio, senza
+modificare dati o promettere un passaggio automatico all'operatore.
 
 ## Hardening di idempotenza e concorrenza
 
-È stata creata, ma **non applicata a nessun ambiente remoto**, la migration:
+La migration seguente è stata applicata esclusivamente al progetto Supabase di
+test “Studio Barber 8”, project ref `ahzlepptjqfhlmlzdphn`:
 
 `supabase/migrations/20260804122814_booking_agent_hardening.sql`
+
+Supabase l'ha registrata nella cronologia remota come versione
+`20260804140534`, nome `booking_agent_hardening`. Nessun altro progetto è stato
+modificato.
 
 La migration introduce:
 
@@ -36,10 +42,37 @@ La migration introduce:
   transazione;
 - RLS e privilegi RPC riservati a `service_role`.
 
-Finché la migration non viene applicata, il codice rileva l'assenza della RPC
-di claim e usa il percorso legacy. Questo evita di interrompere le Preview già
-attive, ma le nuove garanzie di concorrenza diventano effettive solo dopo una
-futura applicazione controllata della migration.
+Il codice mantiene comunque il rilevamento dell'assenza della RPC di claim e il
+percorso legacy per ambienti nei quali la migration non sia presente.
+
+## Gate database non-prod
+
+Le verifiche sono state eseguite realmente sul progetto di test e hanno dato i
+seguenti risultati:
+
+- business verificato: ID `00000000-0000-4000-8000-000000000008`, nome
+  “Studio Barber 8”, slug `studio-barber-8`, attivo, timezone `Europe/Rome`;
+- tabella `booking_inbound_events`, colonne `version` e
+  `last_event_order_key` e tutte le sei nuove funzioni presenti;
+- RLS attiva sulla nuova tabella;
+- funzioni `SECURITY INVOKER`;
+- chiamate reali come `anon` e `authenticated` respinte con PostgreSQL `42501`;
+- chiamate come `service_role` riuscite;
+- transizioni `claimed`, `busy`, `failed`, retry con `attempts = 2`,
+  `processed` e `duplicate` verificate;
+- compare-and-set: versione errata respinta con `40001` e salvataggio con
+  versione corretta avanzato da 1 a 2;
+- evento fuori ordine respinto con `BOOKING_CONVERSATION_STALE_EVENT` senza
+  modificare la conversazione;
+- conferma transazionale riuscita: appuntamento confermato, conversazione
+  `idle` versione 3 ed evento `processed` nello stesso risultato;
+- conferma negativa con slot impossibile respinta con `SLOT_NOT_AVAILABLE`,
+  senza appuntamento e senza avanzamento della conversazione;
+- appuntamento, outbox, cliente, conversazione ed eventi sintetici eliminati;
+  controllo finale: zero residui su tutte le superfici;
+- Security Advisor senza errori; unico rilievo informativo:
+  `rls_enabled_no_policy`, intenzionale per una tabella service-role-only senza
+  grant a `anon` o `authenticated`.
 
 ## Test automatici aggiunti
 
@@ -91,14 +124,14 @@ La scansione del diff e dei nuovi file non ha rilevato pattern di credenziali;
 
 ## Test manuali ancora necessari
 
-- Applicare la migration prima in un ambiente Supabase non produttivo e
-  verificare le RPC con due webhook reali concorrenti.
+- Inviare dalla Preview due webhook WhatsApp reali concorrenti, un duplicato e
+  un messaggio consegnato fuori ordine, verificando anche la risposta Meta.
 - Verificare su Preview un messaggio WhatsApp reale, la risposta Meta e le
   colonne di diagnostica dell'evento.
 - Ripetere nel browser Preview registrazione microfono, trascrizione e tre
   turni alternando percorso OpenAI e fallback.
-- Verificare il passaggio all'operatore concordando il canale operativo reale;
-  in questa milestone il testo informa il cliente ma non apre un ticket.
+- Concordare un eventuale canale futuro di handoff all'operatore; in questa
+  milestone il testo invita a contattare il negozio e non apre un ticket.
 
 ## Fuori dalla milestone
 

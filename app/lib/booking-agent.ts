@@ -509,7 +509,7 @@ async function runNaturalBookingAgent({
     return respond(
       contextHasValues(current) ? stateForContext(current) : "idle",
       current,
-      "Non posso ancora cancellare un appuntamento già confermato da qui. Ti passo all’operatore: nel frattempo non ho modificato né cancellato alcun appuntamento."
+      "Non posso ancora cancellare questo appuntamento. Contatta direttamente il negozio. Nel frattempo non ho modificato né cancellato alcun appuntamento."
     );
   }
   if (turn.intent === "abort_booking") {

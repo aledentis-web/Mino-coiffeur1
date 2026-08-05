@@ -11,6 +11,10 @@ function hasEnvironmentValue(name: string) {
   return Boolean(process.env[name]?.trim());
 }
 
+function hasStrongEnvironmentSecret(name: string) {
+  return (process.env[name]?.trim().length ?? 0) >= 32;
+}
+
 export function getAssistantStatus(): AssistantStatus {
   const bookingEngine =
     hasEnvironmentValue("NEXT_PUBLIC_SUPABASE_URL") &&
@@ -23,16 +27,18 @@ export function getAssistantStatus(): AssistantStatus {
     "META_WHATSAPP_PHONE_NUMBER_ID",
     "META_GRAPH_API_VERSION"
   ].every(hasEnvironmentValue);
+  const phoneVoice =
+    bookingEngine &&
+    hasStrongEnvironmentSecret("VOICE_TOOL_SECRET") &&
+    hasEnvironmentValue("VOICE_PROVIDER_ASSISTANT_ID") &&
+    hasEnvironmentValue("VOICE_PHONE_NUMBER");
 
   return {
     bookingEngine,
     languageAgent,
     whatsapp,
     browserVoice: bookingEngine && languageAgent,
-    phoneVoice:
-      bookingEngine &&
-      languageAgent &&
-      hasEnvironmentValue("VOICE_SIP_FORWARDING_NUMBER"),
-    automations: hasEnvironmentValue("N8N_AUTOMATION_SECRET")
+    phoneVoice,
+    automations: hasStrongEnvironmentSecret("N8N_AUTOMATION_SECRET")
   };
 }

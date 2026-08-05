@@ -14,6 +14,8 @@ const NAMES = [
   "VOICE_TOOL_SECRET",
   "VOICE_PROVIDER_ASSISTANT_ID",
   "VOICE_PHONE_NUMBER",
+  "TELNYX_API_KEY",
+  "TELNYX_PUBLIC_KEY",
   "N8N_AUTOMATION_SECRET"
 ] as const;
 
@@ -41,6 +43,8 @@ test("non dichiara pronti canali con configurazione incompleta", () => {
     process.env.VOICE_TOOL_SECRET = "too-short";
     process.env.VOICE_PROVIDER_ASSISTANT_ID = "assistant-test";
     process.env.VOICE_PHONE_NUMBER = "+390000000000";
+    process.env.TELNYX_API_KEY = "KEY-test";
+    process.env.TELNYX_PUBLIC_KEY = "public-key-test";
     assert.equal(getAssistantStatus().languageAgent, true);
     assert.equal(getAssistantStatus().browserVoice, true);
     assert.equal(getAssistantStatus().phoneVoice, false);

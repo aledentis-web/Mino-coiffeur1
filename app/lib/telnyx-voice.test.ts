@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import {
-  generateKeyPairSync,
-  sign
-} from "node:crypto";
+import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 import {
   isValidTelnyxWebhookSignature,
+  parseTelnyxAssistantInitialization,
   parseTelnyxConversationEnded
 } from "./telnyx-voice.ts";
 
@@ -51,6 +49,42 @@ test("verifica la firma Ed25519 Telnyx e rifiuta replay o payload alterati", () 
       now: new Date(now.getTime() + 301_000)
     }),
     false
+  );
+});
+
+test("estrae l'inizializzazione firmata della chiamata Telnyx", () => {
+  const occurredAt = "2026-08-05T10:15:00.000Z";
+  const parsed = parseTelnyxAssistantInitialization({
+    data: {
+      event_type: "assistant.initialization",
+      id: "00000000-0000-4000-8000-000000000001",
+      occurred_at: occurredAt,
+      payload: {
+        assistant_id: "assistant-test",
+        call_control_id: "call-control-test",
+        conversation_id: "conversation-test",
+        telnyx_conversation_channel: "phone_call",
+        telnyx_agent_target: "+390321234567",
+        telnyx_end_user_target: "+393331234567",
+        verified: true
+      }
+    }
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.assistantId, "assistant-test");
+  assert.equal(parsed.callControlId, "call-control-test");
+  assert.equal(parsed.endUserTarget, "+393331234567");
+  assert.equal(parsed.verified, true);
+  assert.equal(parsed.occurredAt.toISOString(), occurredAt);
+  assert.equal(
+    parseTelnyxAssistantInitialization({
+      data: {
+        event_type: "assistant.initialization",
+        payload: { assistant_id: "assistant-test" }
+      }
+    }),
+    null
   );
 });
 

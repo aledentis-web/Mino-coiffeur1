@@ -39,6 +39,13 @@ function configuredBusinessSlug() {
   return process.env.STUDIO_BARBER_BUSINESS_SLUG?.trim() || "studio-barber-8";
 }
 
+function configuredMetaServiceCostMicroeur() {
+  const value = Number(
+    process.env.META_SERVICE_MESSAGE_COST_MICROEUR?.trim() ?? "0"
+  );
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+}
+
 export async function GET(request: NextRequest) {
   const verifyToken = process.env.META_WHATSAPP_VERIFY_TOKEN?.trim() ?? "";
   if (!verifyToken) {
@@ -168,6 +175,7 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
       status: "sent",
       outboundId
     });
+    const serviceCostMicroeur = configuredMetaServiceCostMicroeur();
     await recordAssistantUsage({
       supabase,
       businessSlug,
@@ -176,12 +184,13 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
       eventType: "service_reply",
       outputUnits: 1,
       currency: "EUR",
-      costMicrounits: 0,
+      costMicrounits: serviceCostMicroeur,
       providerEventId: `outbound:${outboundId}`,
       metadata: {
         unit: "messages",
         category: "service",
-        directReplyToInbound: true
+        directReplyToInbound: true,
+        configuredRateMicroeur: serviceCostMicroeur
       }
     });
     console.info("meta_whatsapp_reply_sent", {

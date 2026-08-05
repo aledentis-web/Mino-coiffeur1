@@ -40,6 +40,9 @@ type AssistantMetrics = {
   openAiCostMicrousd: number;
   metaMessages: number;
   metaCostMicroeur: number;
+  voiceCalls: number;
+  voiceSeconds: number;
+  voiceCostMicrousd: number;
 };
 
 type UsageEvent = {
@@ -48,6 +51,7 @@ type UsageEvent = {
   model: string | null;
   input_units: number | string;
   output_units: number | string;
+  duration_ms: number | string | null;
   cost_microunits: number | string;
   currency: string;
   occurred_at: string;
@@ -84,12 +88,39 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
+function formatDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  if (minutes === 0) return `${remainder} s`;
+  if (remainder === 0) return `${minutes} min`;
+  return `${minutes} min ${remainder} s`;
+}
+
 function usageLabel(eventType: string) {
   if (eventType === "language_turn") return "Turno AI";
   if (eventType === "inbound_message") return "Messaggio ricevuto";
   if (eventType === "service_reply") return "Risposta WhatsApp";
+  if (eventType === "call_initialized") return "Telefonata iniziata";
+  if (eventType === "call_ended") return "Telefonata conclusa";
+  if (eventType === "call_cost") return "Costo telefonata";
+  if (eventType === "services_tool") return "Servizi consultati";
+  if (eventType === "availability_tool") return "Disponibilità consultata";
+  if (eventType === "booking_tool") return "Prenotazione telefonica";
   if (eventType === "ignored_while_paused") return "Ignorato in pausa";
   return eventType.replaceAll("_", " ");
+}
+
+function usageValue(event: UsageEvent) {
+  const cost = Number(event.cost_microunits ?? 0);
+  if (cost > 0) {
+    return formatMoney(cost, event.currency === "EUR" ? "EUR" : "USD");
+  }
+  const durationMs = Number(event.duration_ms ?? 0);
+  if (event.event_type === "call_ended" && durationMs > 0) {
+    return formatDuration(durationMs / 1_000);
+  }
+  return "—";
 }
 
 export function AssistantControlPanel() {
@@ -196,6 +227,11 @@ export function AssistantControlPanel() {
   const control = payload?.control;
   const configuration = payload?.configuration;
   const metrics = payload?.metrics;
+  const statusLabel = operational
+    ? "Agente attivo"
+    : control?.agentEnabled
+      ? "Configurazione incompleta"
+      : "Agente in pausa";
 
   return (
     <main className={styles.shell}>
@@ -220,8 +256,8 @@ export function AssistantControlPanel() {
           <h1>Un tasto. Il negozio risponde da solo.</h1>
           <p className={styles.heroCopy}>
             Quando è attivo, l’agente gestisce i canali collegati e ogni
-            prenotazione compare nella stessa agenda. Quando è in pausa, il
-            webhook non risponde automaticamente.
+            prenotazione compare nella stessa agenda. Quando è in pausa, i
+            canali conservano le proprie impostazioni ma non lavorano.
           </p>
         </div>
 
@@ -232,7 +268,7 @@ export function AssistantControlPanel() {
             <span className={styles.statusDot} />
             <div>
               <small>Stato operativo</small>
-              <strong>{operational ? "Agente attivo" : "Agente in pausa"}</strong>
+              <strong>{statusLabel}</strong>
             </div>
           </div>
           <button
@@ -317,8 +353,8 @@ export function AssistantControlPanel() {
                 <strong>Telefonate</strong>
                 <small>
                   {configuration?.phoneVoice
-                    ? "Numero SIP collegato"
-                    : "Numero SIP ancora da collegare"}
+                    ? "Numero e rendiconto Telnyx collegati"
+                    : "Configurazione Telnyx incompleta"}
                 </small>
               </div>
             </div>
@@ -338,12 +374,12 @@ export function AssistantControlPanel() {
             </button>
             <div className={styles.channelFacts}>
               <span>
-                <b>{integerFormat.format(metrics?.voiceAppointments ?? 0)}</b>
-                appuntamenti vocali
+                <b>{integerFormat.format(metrics?.voiceCalls ?? 0)}</b>
+                telefonate gestite
               </span>
               <span>
-                <b>{configuration?.browserVoice ? "Pronto" : "No"}</b>
-                laboratorio voce
+                <b>{integerFormat.format(metrics?.voiceAppointments ?? 0)}</b>
+                appuntamenti vocali
               </span>
             </div>
           </article>
@@ -368,27 +404,47 @@ export function AssistantControlPanel() {
           <article>
             <span>Risposte consegnate</span>
             <strong>{integerFormat.format(metrics?.repliesSent ?? 0)}</strong>
-            <small>su {integerFormat.format(metrics?.inboundMessages ?? 0)} messaggi</small>
+            <small>
+              su {integerFormat.format(metrics?.inboundMessages ?? 0)} messaggi
+            </small>
           </article>
           <article>
-            <span>Chiamate al modello</span>
+            <span>Telefonate gestite</span>
+            <strong>{integerFormat.format(metrics?.voiceCalls ?? 0)}</strong>
+            <small>{formatDuration(metrics?.voiceSeconds ?? 0)} complessivi</small>
+          </article>
+          <article>
+            <span>Chiamate al modello testuale</span>
             <strong>{integerFormat.format(metrics?.openAiCalls ?? 0)}</strong>
-            <small>{integerFormat.format((metrics?.inputTokens ?? 0) + (metrics?.outputTokens ?? 0))} token</small>
+            <small>
+              {integerFormat.format(
+                (metrics?.inputTokens ?? 0) + (metrics?.outputTokens ?? 0)
+              )} token
+            </small>
           </article>
           <article>
-            <span>Costo OpenAI stimato</span>
+            <span>Costo OpenAI testuale</span>
             <strong>{formatMoney(metrics?.openAiCostMicrousd ?? 0, "USD")}</strong>
-            <small>calcolato dai token registrati</small>
+            <small>stima calcolata dai token registrati</small>
+          </article>
+          <article>
+            <span>Costo telefonate reale</span>
+            <strong>{formatMoney(metrics?.voiceCostMicrousd ?? 0, "USD")}</strong>
+            <small>totale restituito da Telnyx Session Analysis</small>
           </article>
           <article>
             <span>Costo messaggi Meta</span>
             <strong>{formatMoney(metrics?.metaCostMicroeur ?? 0, "EUR")}</strong>
-            <small>{integerFormat.format(metrics?.metaMessages ?? 0)} eventi tracciati</small>
+            <small>
+              {integerFormat.format(metrics?.metaMessages ?? 0)} risposte di servizio
+            </small>
           </article>
           <article className={metrics?.failures ? styles.warningMetric : ""}>
             <span>Errori operativi</span>
             <strong>{integerFormat.format(metrics?.failures ?? 0)}</strong>
-            <small>{metrics?.failures ? "da verificare" : "nessun errore registrato"}</small>
+            <small>
+              {metrics?.failures ? "da verificare" : "nessun errore registrato"}
+            </small>
           </article>
         </div>
       </section>
@@ -404,19 +460,31 @@ export function AssistantControlPanel() {
           <ul>
             <li data-ready={configuration?.bookingEngine}>
               <i />
-              <div><strong>Agenda e database</strong><span>Fonte unica degli appuntamenti</span></div>
+              <div>
+                <strong>Agenda e database</strong>
+                <span>Fonte unica degli appuntamenti</span>
+              </div>
             </li>
             <li data-ready={configuration?.languageAgent}>
               <i />
-              <div><strong>Motore conversazionale</strong><span>OpenAI configurata lato server</span></div>
+              <div>
+                <strong>Motore conversazionale</strong>
+                <span>OpenAI configurata lato server</span>
+              </div>
             </li>
             <li data-ready={configuration?.whatsapp}>
               <i />
-              <div><strong>WhatsApp Business</strong><span>Webhook e numero Meta</span></div>
+              <div>
+                <strong>WhatsApp Business</strong>
+                <span>Webhook e numero Meta</span>
+              </div>
             </li>
             <li data-ready={configuration?.phoneVoice}>
               <i />
-              <div><strong>Numero telefonico</strong><span>Provider SIP e Realtime</span></div>
+              <div>
+                <strong>Numero telefonico</strong>
+                <span>Numero, strumenti e rendiconto Telnyx</span>
+              </div>
             </li>
           </ul>
         </article>
@@ -430,31 +498,27 @@ export function AssistantControlPanel() {
           </div>
           {payload?.recentUsage.length ? (
             <div className={styles.ledgerList}>
-              {payload.recentUsage.slice(0, 8).map((event, index) => {
-                const cost = Number(event.cost_microunits ?? 0);
-                return (
-                  <div key={`${event.occurred_at}-${event.provider}-${index}`}>
-                    <span className={styles.provider}>{event.provider}</span>
-                    <div>
-                      <strong>{usageLabel(event.event_type)}</strong>
-                      <small>{formatDate(event.occurred_at)}{event.model ? ` · ${event.model}` : ""}</small>
-                    </div>
-                    <b>
-                      {cost
-                        ? formatMoney(
-                            cost,
-                            event.currency === "EUR" ? "EUR" : "USD"
-                          )
-                        : "—"}
-                    </b>
+              {payload.recentUsage.slice(0, 10).map((event, index) => (
+                <div key={`${event.occurred_at}-${event.provider}-${index}`}>
+                  <span className={styles.provider}>{event.provider}</span>
+                  <div>
+                    <strong>{usageLabel(event.event_type)}</strong>
+                    <small>
+                      {formatDate(event.occurred_at)}
+                      {event.model ? ` · ${event.model}` : ""}
+                    </small>
                   </div>
-                );
-              })}
+                  <b>{usageValue(event)}</b>
+                </div>
+              ))}
             </div>
           ) : (
             <div className={styles.emptyLedger}>
               <strong>Nessun consumo ancora registrato</strong>
-              <p>Il primo messaggio reale popolerà automaticamente questo registro.</p>
+              <p>
+                Il primo messaggio o la prima telefonata reale popoleranno
+                automaticamente questo registro.
+              </p>
             </div>
           )}
         </article>

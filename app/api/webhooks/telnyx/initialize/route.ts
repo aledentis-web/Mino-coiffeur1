@@ -31,19 +31,28 @@ function lastFour(value: string | null) {
   return value?.replace(/\D/g, "").slice(-4) || "unknown";
 }
 
+function normalizedCallerNumber(value: string | null) {
+  if (!value) return "";
+  const normalized = value.replace(/[\s().-]/g, "").trim();
+  return /^\+[1-9][0-9]{7,14}$/.test(normalized) ? normalized : "";
+}
+
 function dynamicVariables({
   active,
-  fallbackNumber
+  fallbackNumber,
+  callerNumber
 }: {
   active: boolean;
   fallbackNumber: string;
+  callerNumber: string;
 }) {
   return {
     agent_mode: active ? "active" : "paused",
     agent_enabled: active ? "true" : "false",
     agent_greeting: active
-      ? "Ciao, hai chiamato Studio Barber 8. Sono l’assistente digitale: posso aiutarti a prenotare un appuntamento."
+      ? "Ciao, hai chiamato Studio Barber 8. Sono l’assistente digitale: posso aiutarti a prenotare o cancellare un appuntamento."
       : "Ciao, hai chiamato Studio Barber 8. Il servizio automatico è momentaneamente in pausa.",
+    caller_number: callerNumber,
     fallback_number: fallbackNumber,
     business_name: "Studio Barber 8",
     business_timezone: "Europe/Rome"
@@ -87,6 +96,7 @@ export async function POST(request: Request) {
   }
 
   const fallbackNumber = process.env.VOICE_FALLBACK_NUMBER?.trim() ?? "";
+  const callerNumber = normalizedCallerNumber(initialization.endUserTarget);
 
   try {
     const supabase = getServerSupabase();
@@ -118,7 +128,11 @@ export async function POST(request: Request) {
     });
 
     return noStore({
-      dynamic_variables: dynamicVariables({ active, fallbackNumber })
+      dynamic_variables: dynamicVariables({
+        active,
+        fallbackNumber,
+        callerNumber
+      })
     });
   } catch (error) {
     if (!(error instanceof SupabaseConfigurationError)) {
@@ -128,7 +142,8 @@ export async function POST(request: Request) {
     return noStore({
       dynamic_variables: dynamicVariables({
         active: false,
-        fallbackNumber
+        fallbackNumber,
+        callerNumber
       })
     });
   }

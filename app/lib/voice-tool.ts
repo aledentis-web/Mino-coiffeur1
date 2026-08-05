@@ -28,8 +28,10 @@ function secureEqual(left: string, right: string) {
 }
 
 export function requireVoiceToolAuthorization(request: Request) {
-  const expected = process.env.VOICE_TOOL_SECRET?.trim();
-  if (!expected) throw new VoiceToolAuthorizationError("VOICE_TOOL_NOT_CONFIGURED");
+  const expected = process.env.VOICE_TOOL_SECRET?.trim() ?? "";
+  if (expected.length < 32) {
+    throw new VoiceToolAuthorizationError("VOICE_TOOL_NOT_CONFIGURED");
+  }
 
   const authorization = request.headers.get("authorization")?.trim() ?? "";
   const bearer = authorization.toLowerCase().startsWith("bearer ")

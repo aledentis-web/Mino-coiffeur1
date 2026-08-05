@@ -11,7 +11,9 @@ const NAMES = [
   "META_WHATSAPP_ACCESS_TOKEN",
   "META_WHATSAPP_PHONE_NUMBER_ID",
   "META_GRAPH_API_VERSION",
-  "VOICE_SIP_FORWARDING_NUMBER",
+  "VOICE_TOOL_SECRET",
+  "VOICE_PROVIDER_ASSISTANT_ID",
+  "VOICE_PHONE_NUMBER",
   "N8N_AUTOMATION_SECRET"
 ] as const;
 
@@ -36,9 +38,14 @@ test("non dichiara pronti canali con configurazione incompleta", () => {
     assert.equal(getAssistantStatus().browserVoice, false);
 
     process.env.OPENAI_API_KEY = "sk-test";
-    process.env.VOICE_SIP_FORWARDING_NUMBER = "+390000000000";
+    process.env.VOICE_TOOL_SECRET = "too-short";
+    process.env.VOICE_PROVIDER_ASSISTANT_ID = "assistant-test";
+    process.env.VOICE_PHONE_NUMBER = "+390000000000";
     assert.equal(getAssistantStatus().languageAgent, true);
     assert.equal(getAssistantStatus().browserVoice, true);
+    assert.equal(getAssistantStatus().phoneVoice, false);
+
+    process.env.VOICE_TOOL_SECRET = "v".repeat(48);
     assert.equal(getAssistantStatus().phoneVoice, true);
     assert.equal(getAssistantStatus().whatsapp, false);
   } finally {

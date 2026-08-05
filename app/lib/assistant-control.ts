@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getServerSupabase } from "./supabase/server";
+import { getServerSupabase } from "./supabase/server.ts";
 
 export type AssistantControlState = {
   businessId: string;

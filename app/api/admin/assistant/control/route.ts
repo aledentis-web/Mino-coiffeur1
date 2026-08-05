@@ -41,6 +41,7 @@ type UsageRow = {
   model: string | null;
   input_units: number | string;
   output_units: number | string;
+  duration_ms: number | string | null;
   cost_microunits: number | string;
   currency: string;
   occurred_at: string;
@@ -78,7 +79,7 @@ export async function GET(request: NextRequest) {
       supabase
         .from("assistant_usage_events")
         .select(
-          "provider, event_type, model, input_units, output_units, cost_microunits, currency, occurred_at"
+          "provider, event_type, model, input_units, output_units, duration_ms, cost_microunits, currency, occurred_at"
         )
         .eq("business_id", control.businessId)
         .gte("occurred_at", periodStart)
@@ -107,6 +108,10 @@ export async function GET(request: NextRequest) {
     const appointments = (appointmentResult.data ?? []) as AppointmentRow[];
     const openAiUsage = usage.filter((event) => event.provider === "openai");
     const metaUsage = usage.filter((event) => event.provider === "meta");
+    const voiceUsage = usage.filter((event) => event.provider === "sip");
+    const endedCalls = voiceUsage.filter(
+      (event) => event.event_type === "call_ended"
+    );
     const agentAppointments = appointments.filter(
       (appointment) =>
         appointment.status !== "cancelled" &&
@@ -148,9 +153,24 @@ export async function GET(request: NextRequest) {
           (total, event) => total + numeric(event.cost_microunits),
           0
         ),
-      metaMessages: metaUsage.length,
+      metaMessages: metaUsage.filter(
+        (event) => event.event_type === "service_reply"
+      ).length,
       metaCostMicroeur: metaUsage
         .filter((event) => event.currency === "EUR")
+        .reduce(
+          (total, event) => total + numeric(event.cost_microunits),
+          0
+        ),
+      voiceCalls: endedCalls.length,
+      voiceSeconds: Math.round(
+        endedCalls.reduce(
+          (total, event) => total + numeric(event.duration_ms),
+          0
+        ) / 1_000
+      ),
+      voiceCostMicrousd: voiceUsage
+        .filter((event) => event.currency === "USD")
         .reduce(
           (total, event) => total + numeric(event.cost_microunits),
           0
@@ -161,7 +181,7 @@ export async function GET(request: NextRequest) {
       control,
       configuration: getAssistantStatus(),
       metrics,
-      recentUsage: usage.slice(0, 12)
+      recentUsage: usage.slice(0, 16)
     });
   } catch (error) {
     if (error instanceof SupabaseConfigurationError) {

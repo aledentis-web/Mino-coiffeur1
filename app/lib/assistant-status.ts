@@ -30,8 +30,12 @@ export function getAssistantStatus(): AssistantStatus {
   const phoneVoice =
     bookingEngine &&
     hasStrongEnvironmentSecret("VOICE_TOOL_SECRET") &&
-    hasEnvironmentValue("VOICE_PROVIDER_ASSISTANT_ID") &&
-    hasEnvironmentValue("VOICE_PHONE_NUMBER");
+    [
+      "VOICE_PROVIDER_ASSISTANT_ID",
+      "VOICE_PHONE_NUMBER",
+      "TELNYX_API_KEY",
+      "TELNYX_PUBLIC_KEY"
+    ].every(hasEnvironmentValue);
 
   return {
     bookingEngine,

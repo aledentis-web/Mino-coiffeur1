@@ -1,6 +1,10 @@
 import "server-only";
 
 import {
+  estimateOpenAiTextCostMicrousd,
+  recordAssistantUsage
+} from "./assistant-control";
+import {
   validateBookingAgentTurn,
   type BookingAgentTurn
 } from "./booking-agent-language-helpers.ts";
@@ -11,6 +15,7 @@ const DEFAULT_MODEL = "gpt-5-mini";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 type ResponsesPayload = {
+  id?: unknown;
   output_text?: unknown;
   output?: Array<{
     content?: Array<{
@@ -18,6 +23,10 @@ type ResponsesPayload = {
       text?: unknown;
     }>;
   }>;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+  };
 };
 
 const FIELD_SCHEMA = {
@@ -66,6 +75,12 @@ function extractOutputText(payload: ResponsesPayload) {
   return null;
 }
 
+function usageTokens(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : 0;
+}
+
 export async function interpretBookingAgentTurn({
   body,
   context,
@@ -80,6 +95,8 @@ export async function interpretBookingAgentTurn({
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
+  const model = process.env.OPENAI_ASSISTANT_MODEL?.trim() || DEFAULT_MODEL;
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -94,7 +111,7 @@ export async function interpretBookingAgentTurn({
           : {})
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_ASSISTANT_MODEL?.trim() || DEFAULT_MODEL,
+        model,
         store: false,
         input: [
           {
@@ -156,7 +173,36 @@ export async function interpretBookingAgentTurn({
       return null;
     }
 
-    const output = extractOutputText((await response.json()) as ResponsesPayload);
+    const payload = (await response.json()) as ResponsesPayload;
+    const inputTokens = usageTokens(payload.usage?.input_tokens);
+    const outputTokens = usageTokens(payload.usage?.output_tokens);
+    const estimatedCost = estimateOpenAiTextCostMicrousd({
+      model,
+      inputTokens,
+      outputTokens
+    });
+
+    await recordAssistantUsage({
+      channel: "shared",
+      provider: "openai",
+      eventType: "language_turn",
+      model,
+      inputUnits: inputTokens,
+      outputUnits: outputTokens,
+      durationMs: Date.now() - startedAt,
+      costMicrounits: estimatedCost ?? 0,
+      currency: "USD",
+      providerEventId:
+        typeof payload.id === "string" ? payload.id : undefined,
+      metadata: {
+        unit: "tokens",
+        priced: estimatedCost !== null,
+        pricingSnapshot: "2026-08-05"
+      },
+      occurredAt: now
+    });
+
+    const output = extractOutputText(payload);
     if (!output) return null;
     return validateBookingAgentTurn({
       value: JSON.parse(output) as unknown,

@@ -3,7 +3,7 @@ import "server-only";
 import {
   estimateOpenAiTextCostMicrousd,
   recordAssistantUsage
-} from "./assistant-control";
+} from "./assistant-control.ts";
 import {
   validateBookingAgentTurn,
   type BookingAgentTurn

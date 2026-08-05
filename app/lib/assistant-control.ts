@@ -125,7 +125,7 @@ export async function getAssistantControl({
       businessActive: business.active,
       agentEnabled: false,
       whatsappEnabled: inserted.whatsapp_enabled !== false,
-      voiceEnabled: false,
+      voiceEnabled: inserted.voice_enabled === true,
       activatedAt: null,
       pausedAt: null,
       updatedAt: String(inserted.updated_at ?? now),
@@ -138,8 +138,7 @@ export async function getAssistantControl({
     businessActive: business.active,
     agentEnabled: business.active && data.agent_enabled === true,
     whatsappEnabled: data.whatsapp_enabled === true,
-    voiceEnabled:
-      business.active && data.agent_enabled === true && data.voice_enabled === true,
+    voiceEnabled: data.voice_enabled === true,
     activatedAt:
       typeof data.activated_at === "string" ? data.activated_at : null,
     pausedAt: typeof data.paused_at === "string" ? data.paused_at : null,
@@ -168,11 +167,15 @@ export async function updateAssistantControl({
   const now = new Date().toISOString();
   const agentEnabled = patch.agentEnabled ?? current.agentEnabled;
   const whatsappEnabled = patch.whatsappEnabled ?? current.whatsappEnabled;
-  const voiceRequested = patch.voiceEnabled ?? current.voiceEnabled;
-  const voiceEnabled = agentEnabled && voiceRequested;
+  const voiceEnabled = patch.voiceEnabled ?? current.voiceEnabled;
   const activatedAt =
     agentEnabled && !current.agentEnabled ? now : current.activatedAt;
-  const pausedAt = !agentEnabled && current.agentEnabled ? now : agentEnabled ? null : current.pausedAt;
+  const pausedAt =
+    !agentEnabled && current.agentEnabled
+      ? now
+      : agentEnabled
+        ? null
+        : current.pausedAt;
 
   const { error } = await supabase
     .from("business_assistant_settings")

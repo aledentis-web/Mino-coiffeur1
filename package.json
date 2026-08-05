@@ -1,6 +1,6 @@
 {
   "name": "studio-barber-8",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,25 +9,26 @@
     "postbuild": "node scripts/verify-vercel-env.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test app/lib/*.test.ts"
+    "test": "node --conditions=react-server --test app/lib/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",
-    "next": "^16.2.4",
+    "next": "^16.2.12",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "server-only": "0.0.1",
-    "twilio": "6.0.2"
+    "sharp": "^0.35.3"
   },
   "overrides": {
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "sharp": "$sharp"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
-    "postcss": "^8.5.12",
+    "postcss": "^8.5.25",
     "supabase": "2.109.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2"

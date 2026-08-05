@@ -38,16 +38,40 @@ export async function recordAssistantDelivery({
   errorCode?: string;
   errorMessage?: string;
 }) {
-  const { error } = await getServerSupabase()
-    .from("whatsapp_conversations")
+  const supabase = getServerSupabase();
+  const update = {
+    delivery_status: status,
+    outbound_provider_message_id: outboundId ?? null,
+    delivery_error_code: errorCode ?? null,
+    delivery_error_message: errorMessage ?? null,
+    delivery_attempt_at: new Date().toISOString()
+  };
+  const { error } = await supabase
+    .from("booking_inbound_events")
     .update({
-      last_delivery_status: status,
-      last_outbound_sid: outboundId ?? null,
-      last_delivery_error_code: errorCode ?? null,
-      last_delivery_error_message: errorMessage ?? null,
-      last_delivery_attempt_at: new Date().toISOString()
+      ...update,
+      updated_at: new Date().toISOString()
     })
-    .eq("last_message_sid", messageId);
+    .eq("provider_message_id", messageId);
+
+  if (error?.code === "42P01" || error?.code === "PGRST205") {
+    const { error: legacyError } = await supabase
+      .from("whatsapp_conversations")
+      .update({
+        last_delivery_status: status,
+        last_outbound_sid: outboundId ?? null,
+        last_delivery_error_code: errorCode ?? null,
+        last_delivery_error_message: errorMessage ?? null,
+        last_delivery_attempt_at: update.delivery_attempt_at
+      })
+      .eq("last_message_sid", messageId);
+    if (!legacyError) return;
+    console.error("assistant_delivery_diagnostic_failed", {
+      messageId,
+      code: legacyError.code
+    });
+    return;
+  }
 
   if (error) {
     console.error("assistant_delivery_diagnostic_failed", {

@@ -10,4 +10,4 @@ comment on column public.whatsapp_conversations.last_delivery_status is
   'Most recent outbound WhatsApp delivery attempt: pending, sent, or failed.';
 
 comment on column public.whatsapp_conversations.last_delivery_error_message is
-  'Sanitized and truncated Twilio REST error for operational diagnostics.';
+  'Sanitized and truncated provider error for operational diagnostics.';

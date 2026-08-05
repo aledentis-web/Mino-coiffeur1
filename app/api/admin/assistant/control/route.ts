@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getAssistantControl,
   updateAssistantControl
-} from "../../../../../lib/assistant-control";
-import { isAuthorizedAdminRequest } from "../../../../../lib/admin-request";
-import { getAssistantStatus } from "../../../../../lib/assistant-status";
+} from "../../../../lib/assistant-control";
+import { isAuthorizedAdminRequest } from "../../../../lib/admin-request";
+import { getAssistantStatus } from "../../../../lib/assistant-status";
 import {
   getServerSupabase,
   SupabaseConfigurationError
-} from "../../../../../lib/supabase/server";
+} from "../../../../lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

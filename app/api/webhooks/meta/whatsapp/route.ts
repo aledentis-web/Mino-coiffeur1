@@ -19,7 +19,7 @@ import {
   getServerSupabase,
   SupabaseConfigurationError
 } from "../../../../lib/supabase/server";
-import { handleBookingAgentMessage } from "../../../../lib/booking-agent";
+import { handleStudioAssistantMessage } from "../../../../lib/studio-assistant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -129,7 +129,7 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
       return;
     }
 
-    const result = await handleBookingAgentMessage({
+    const result = await handleStudioAssistantMessage({
       supabase,
       businessSlug,
       resourceSlug:

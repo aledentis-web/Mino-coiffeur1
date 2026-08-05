@@ -5,6 +5,18 @@ import { createPublicKey, verify, type KeyObject } from "node:crypto";
 const MAX_WEBHOOK_AGE_SECONDS = 300;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
+export type TelnyxAssistantInitialization = {
+  eventId: string;
+  occurredAt: Date;
+  assistantId: string;
+  callControlId: string;
+  conversationId: string | null;
+  conversationChannel: string | null;
+  agentTarget: string | null;
+  endUserTarget: string | null;
+  verified: boolean;
+};
+
 export type TelnyxConversationEnded = {
   eventId: string;
   occurredAt: Date;
@@ -85,20 +97,65 @@ function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function parseTelnyxConversationEnded(
-  value: unknown
-): TelnyxConversationEnded | null {
+function eventEnvelope(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = (value as Record<string, unknown>).data;
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const event = data as Record<string, unknown>;
-  if (event.event_type !== "call.conversation.ended") return null;
   const payload = event.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
+  return { event, details: payload as Record<string, unknown> };
+}
 
-  const details = payload as Record<string, unknown>;
+export function parseTelnyxAssistantInitialization(
+  value: unknown
+): TelnyxAssistantInitialization | null {
+  const envelope = eventEnvelope(value);
+  if (!envelope || envelope.event.event_type !== "assistant.initialization") {
+    return null;
+  }
+
+  const { event, details } = envelope;
+  const eventId = stringValue(event.id);
+  const occurredAtRaw = stringValue(event.occurred_at);
+  const assistantId = stringValue(details.assistant_id);
+  const callControlId = stringValue(details.call_control_id);
+  const occurredAt = occurredAtRaw ? new Date(occurredAtRaw) : null;
+
+  if (
+    !eventId ||
+    !occurredAt ||
+    Number.isNaN(occurredAt.getTime()) ||
+    !assistantId ||
+    !callControlId
+  ) {
+    return null;
+  }
+
+  return {
+    eventId,
+    occurredAt,
+    assistantId,
+    callControlId,
+    conversationId: stringValue(details.conversation_id),
+    conversationChannel: stringValue(details.telnyx_conversation_channel),
+    agentTarget: stringValue(details.telnyx_agent_target),
+    endUserTarget: stringValue(details.telnyx_end_user_target),
+    verified: details.verified === true
+  };
+}
+
+export function parseTelnyxConversationEnded(
+  value: unknown
+): TelnyxConversationEnded | null {
+  const envelope = eventEnvelope(value);
+  if (!envelope || envelope.event.event_type !== "call.conversation.ended") {
+    return null;
+  }
+
+  const { event, details } = envelope;
   const eventId = stringValue(event.id);
   const occurredAtRaw = stringValue(event.occurred_at);
   const assistantId = stringValue(details.assistant_id);

@@ -66,7 +66,7 @@ test("estrae l'inizializzazione firmata della chiamata Telnyx", () => {
         telnyx_conversation_channel: "phone_call",
         telnyx_agent_target: "+390321234567",
         telnyx_end_user_target: "+393331234567",
-        verified: true
+        telnyx_end_user_target_verified: true
       }
     }
   });

@@ -143,7 +143,7 @@ export function parseTelnyxAssistantInitialization(
     conversationChannel: stringValue(details.telnyx_conversation_channel),
     agentTarget: stringValue(details.telnyx_agent_target),
     endUserTarget: stringValue(details.telnyx_end_user_target),
-    verified: details.verified === true
+    verified: details.telnyx_end_user_target_verified === true
   };
 }
 

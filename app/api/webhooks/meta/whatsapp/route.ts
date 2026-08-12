@@ -1,5 +1,9 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import {
+  getAssistantControl,
+  recordAssistantUsage
+} from "../../../../lib/assistant-control";
+import {
   recordAssistantDelivery,
   sanitizeProviderError
 } from "../../../../lib/assistant-delivery";
@@ -15,7 +19,7 @@ import {
   getServerSupabase,
   SupabaseConfigurationError
 } from "../../../../lib/supabase/server";
-import { handleBookingAssistantMessage } from "../../../../lib/whatsapp-assistant";
+import { handleStudioAssistantMessage } from "../../../../lib/studio-assistant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,6 +33,17 @@ function noStore(body: unknown, status = 200) {
     status,
     headers: { "Cache-Control": "no-store" }
   });
+}
+
+function configuredBusinessSlug() {
+  return process.env.STUDIO_BARBER_BUSINESS_SLUG?.trim() || "studio-barber-8";
+}
+
+function configuredMetaServiceCostMicroeur() {
+  const value = Number(
+    process.env.META_SERVICE_MESSAGE_COST_MICROEUR?.trim() ?? "0"
+  );
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
 }
 
 export async function GET(request: NextRequest) {
@@ -59,6 +74,7 @@ export async function GET(request: NextRequest) {
 
 async function processMetaMessage(message: MetaWhatsAppMessage) {
   const startedAt = Date.now();
+  const businessSlug = configuredBusinessSlug();
   let responseMessage = FALLBACK_MESSAGE;
   let duplicate = false;
   let config: ReturnType<typeof getMetaWhatsAppSendConfig>;
@@ -80,18 +96,50 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
     return;
   }
 
+  let supabase: ReturnType<typeof getServerSupabase>;
   try {
-    const result = await handleBookingAssistantMessage({
-      supabase: getServerSupabase(),
-      businessSlug:
-        process.env.STUDIO_BARBER_BUSINESS_SLUG?.trim() || "studio-barber-8",
+    supabase = getServerSupabase();
+    const control = await getAssistantControl({ supabase, businessSlug });
+
+    await recordAssistantUsage({
+      supabase,
+      businessId: control.businessId,
+      channel: "whatsapp",
+      provider: "meta",
+      eventType: "inbound_message",
+      inputUnits: 1,
+      currency: "EUR",
+      costMicrounits: 0,
+      providerEventId: `inbound:${message.messageId}`,
+      metadata: {
+        unit: "messages",
+        agentEnabled: control.agentEnabled,
+        channelEnabled: control.whatsappEnabled
+      },
+      occurredAt: message.occurredAt
+    });
+
+    if (!control.agentEnabled || !control.whatsappEnabled) {
+      console.info("meta_whatsapp_ignored_while_paused", {
+        inboundMessageId: message.messageId,
+        agentEnabled: control.agentEnabled,
+        channelEnabled: control.whatsappEnabled,
+        durationMs: Date.now() - startedAt
+      });
+      return;
+    }
+
+    const result = await handleStudioAssistantMessage({
+      supabase,
+      businessSlug,
       resourceSlug:
         process.env.STUDIO_BARBER_RESOURCE_SLUG?.trim() || "main",
       phoneE164: message.from,
       body: message.body,
       messageSid: message.messageId,
       bookingChannel: "whatsapp",
-      externalReferencePrefix: "meta"
+      externalReferencePrefix: "meta",
+      occurredAt: message.occurredAt
     });
     responseMessage = result.response;
     duplicate = result.duplicate;
@@ -101,6 +149,7 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
     } else {
       console.error("meta_whatsapp_assistant_failed", error);
     }
+    return;
   }
 
   if (duplicate) {
@@ -125,6 +174,24 @@ async function processMetaMessage(message: MetaWhatsAppMessage) {
       messageId: message.messageId,
       status: "sent",
       outboundId
+    });
+    const serviceCostMicroeur = configuredMetaServiceCostMicroeur();
+    await recordAssistantUsage({
+      supabase,
+      businessSlug,
+      channel: "whatsapp",
+      provider: "meta",
+      eventType: "service_reply",
+      outputUnits: 1,
+      currency: "EUR",
+      costMicrounits: serviceCostMicroeur,
+      providerEventId: `outbound:${outboundId}`,
+      metadata: {
+        unit: "messages",
+        category: "service",
+        directReplyToInbound: true,
+        configuredRateMicroeur: serviceCostMicroeur
+      }
     });
     console.info("meta_whatsapp_reply_sent", {
       inboundMessageId: message.messageId,

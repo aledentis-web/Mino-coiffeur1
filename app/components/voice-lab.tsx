@@ -5,32 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import { syntheticCustomers } from "../lib/seed";
 import { ArrowUpRight, HeadsetIcon, PhoneIcon } from "./icons";
 
-type SpeechResultEvent = {
-  results: ArrayLike<{
-    0: { transcript: string };
-    isFinal: boolean;
-  }>;
-};
-
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onend: (() => void) | null;
-  onerror: ((event: { error?: string }) => void) | null;
-  onresult: ((event: SpeechResultEvent) => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-}
+const MAX_RECORDING_DURATION_MS = 20_000;
+const RECORDING_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/mp4",
+  "audio/webm"
+];
 
 type ConversationMessage = {
   id: string;
@@ -45,13 +25,29 @@ export function VoiceLab() {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const busy = transcribing || loading;
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
+      if (recordingTimeoutRef.current) {
+        clearTimeout(recordingTimeoutRef.current);
+      }
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -126,52 +122,140 @@ export function VoiceLab() {
     }
   }
 
-  function startListening() {
+  function stopMediaStream() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
+
+  function preferredRecordingMimeType() {
+    return RECORDING_MIME_TYPES.find((type) =>
+      MediaRecorder.isTypeSupported(type)
+    );
+  }
+
+  async function transcribeRecording(recording: Blob) {
+    setTranscribing(true);
     setFeedback("");
-    const SpeechRecognition =
-      window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
+
+    try {
+      const formData = new FormData();
+      formData.set(
+        "audio",
+        recording,
+        recording.type.includes("mp4")
+          ? "studio-barber-voice.m4a"
+          : "studio-barber-voice.webm"
+      );
+      const response = await fetch("/api/admin/assistant/transcribe", {
+        method: "POST",
+        body: formData
+      });
+      const payload = (await response.json()) as {
+        text?: string;
+        error?: string;
+      };
+
+      if (response.status === 401) {
+        window.location.assign("/admin/login");
+        return;
+      }
+      if (!response.ok || !payload.text) {
+        throw new Error(
+          payload.error ?? "La trascrizione non ha restituito del testo."
+        );
+      }
+
+      await sendMessage(payload.text);
+    } catch (error) {
       setFeedback(
-        "Il riconoscimento vocale non è disponibile in questo browser. Usa Chrome oppure scrivi il messaggio."
+        error instanceof Error
+          ? error.message
+          : "Non sono riuscito a trascrivere l’audio."
+      );
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function startListening() {
+    setFeedback("");
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setFeedback(
+        "La registrazione vocale non è disponibile in questo browser. Puoi comunque scrivere il messaggio."
       );
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = "it-IT";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .filter((result) => result.isFinal)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-      if (transcript) void sendMessage(transcript);
-    };
-    recognition.onerror = (event) => {
-      setFeedback(
-        event.error === "not-allowed"
-          ? "Permesso microfono negato. Abilitalo nelle impostazioni del browser."
-          : "Non sono riuscito a capire l’audio. Riprova."
-      );
-    };
-    recognition.onend = () => {
-      recognitionRef.current = null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      streamRef.current = stream;
+      chunksRef.current = [];
+
+      const mimeType = preferredRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setFeedback("La registrazione si è interrotta. Riprova.");
+        setListening(false);
+        stopMediaStream();
+      };
+      recorder.onstop = () => {
+        if (recordingTimeoutRef.current) {
+          clearTimeout(recordingTimeoutRef.current);
+          recordingTimeoutRef.current = null;
+        }
+        const chunks = chunksRef.current;
+        chunksRef.current = [];
+        recorderRef.current = null;
+        const recording = new Blob(chunks, {
+          type: recorder.mimeType || mimeType || "audio/webm"
+        });
+        stopMediaStream();
+        setListening(false);
+        if (recording.size > 0) void transcribeRecording(recording);
+        else setFeedback("La registrazione è vuota. Riprova.");
+      };
+
+      recorder.start();
+      setListening(true);
+      recordingTimeoutRef.current = setTimeout(() => {
+        if (recorder.state !== "inactive") recorder.stop();
+      }, MAX_RECORDING_DURATION_MS);
+    } catch (error) {
+      stopMediaStream();
       setListening(false);
-    };
-    recognitionRef.current = recognition;
-    setListening(true);
-    recognition.start();
+      setFeedback(
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "Permesso microfono negato. Abilitalo nelle impostazioni del browser."
+          : "Non riesco ad accedere al microfono. Riprova."
+      );
+    }
   }
 
   function stopListening() {
-    recognitionRef.current?.stop();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
   }
 
   function changeCustomer(nextCustomerId: string) {
     window.speechSynthesis?.cancel();
-    recognitionRef.current?.stop();
     setCustomerId(nextCustomerId);
     setMessages([]);
     setDraft("");
@@ -185,8 +269,8 @@ export function VoiceLab() {
           <span>Studio Barber 8 · Ingresso 03</span>
           <h1>Laboratorio vocale</h1>
           <p>
-            Parla dal browser: trascrizione, assistente e agenda usano lo
-            stesso backend di WhatsApp.
+            Parla dal browser: OpenAI trascrive l’audio e lo stesso motore di
+            WhatsApp aggiorna l’agenda.
           </p>
         </div>
         <div>
@@ -211,6 +295,7 @@ export function VoiceLab() {
           <label>
             <span>Cliente simulato</span>
             <select
+              disabled={busy || listening}
               value={customerId}
               onChange={(event) => changeCustomer(event.target.value)}
             >
@@ -225,16 +310,30 @@ export function VoiceLab() {
           <button
             aria-pressed={listening}
             className={`voice-microphone ${listening ? "listening" : ""}`}
-            disabled={loading}
-            onClick={listening ? stopListening : startListening}
+            disabled={busy}
+            onClick={
+              listening
+                ? stopListening
+                : () => {
+                    void startListening();
+                  }
+            }
             type="button"
           >
             <span><PhoneIcon /></span>
-            <strong>{listening ? "Sto ascoltando…" : "Parla con l’assistente"}</strong>
+            <strong>
+              {transcribing
+                ? "Trascrizione in corso…"
+                : listening
+                  ? "Sto registrando…"
+                  : "Parla con l’assistente"}
+            </strong>
             <small>
-              {listening
+              {transcribing
+                ? "OpenAI sta trasformando l’audio in testo"
+                : listening
                 ? "Premi per interrompere"
-                : "Il browser chiederà il permesso per il microfono"}
+                : "Massimo 20 secondi per ogni messaggio"}
             </small>
           </button>
 
@@ -242,7 +341,7 @@ export function VoiceLab() {
             <strong>Test protetto</strong>
             <p>
               L’endpoint è accessibile solo dalla sessione amministratore.
-              Nessuna credenziale Twilio viene inviata al browser.
+              Le chiavi OpenAI e Supabase restano esclusivamente sul server.
             </p>
           </div>
         </aside>
@@ -256,11 +355,19 @@ export function VoiceLab() {
                 <small>{customer?.phone}</small>
               </div>
             </div>
-            <em>{loading ? "Elaborazione…" : "Pronto"}</em>
+            <em>
+              {transcribing
+                ? "Trascrizione…"
+                : loading
+                  ? "Elaborazione…"
+                  : listening
+                    ? "Registrazione…"
+                    : "Pronto"}
+            </em>
           </div>
 
           <div
-            aria-busy={loading}
+            aria-busy={busy}
             aria-live="polite"
             className="voice-messages"
           >
@@ -296,12 +403,15 @@ export function VoiceLab() {
           >
             <input
               aria-label="Messaggio per l’assistente"
-              disabled={loading}
+              disabled={busy || listening}
               onChange={(event) => setDraft(event.target.value)}
               placeholder="Oppure scrivi qui…"
               value={draft}
             />
-            <button disabled={!draft.trim() || loading} type="submit">
+            <button
+              disabled={!draft.trim() || busy || listening}
+              type="submit"
+            >
               Invia
             </button>
           </form>

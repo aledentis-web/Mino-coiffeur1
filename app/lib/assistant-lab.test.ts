@@ -29,7 +29,7 @@ test("rifiuta messaggi vuoti e identificatori non isolati", () => {
     parseVoiceLabInput({
       phone: "+393331234567",
       text: "Ciao",
-      messageId: "twilio:12345678"
+      messageId: "external:12345678"
     })
   );
 });

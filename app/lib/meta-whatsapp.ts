@@ -10,6 +10,7 @@ export type MetaWhatsAppMessage = {
   from: string;
   messageId: string;
   phoneNumberId: string;
+  occurredAt: Date;
 };
 
 export class MetaWhatsAppConfigurationError extends Error {
@@ -113,12 +114,17 @@ export function parseMetaWhatsAppMessages(payload: unknown) {
         const messageId =
           typeof message?.id === "string" ? message.id.trim() : "";
         const body = typeof text?.body === "string" ? text.body.trim() : "";
+        const timestamp =
+          typeof message?.timestamp === "string" && /^\d{9,12}$/.test(message.timestamp)
+            ? Number(message.timestamp) * 1000
+            : Number.NaN;
 
         if (
           message?.type !== "text" ||
           !/^[1-9][0-9]{7,14}$/.test(from) ||
           !META_MESSAGE_ID_PATTERN.test(messageId) ||
-          !body
+          !body ||
+          !Number.isFinite(timestamp)
         ) {
           continue;
         }
@@ -127,7 +133,8 @@ export function parseMetaWhatsAppMessages(payload: unknown) {
           body: body.slice(0, 4096),
           from: `+${from}`,
           messageId,
-          phoneNumberId
+          phoneNumberId,
+          occurredAt: new Date(timestamp)
         });
       }
     }

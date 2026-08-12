@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BookingChannel } from "./domain";
+import { interpretBookingLanguage } from "./assistant-language";
 import {
   normalizeWhatsAppText,
   parseItalianBookingDate,
@@ -47,7 +48,7 @@ type AssistantInput = {
   body: string;
   messageSid: string;
   bookingChannel?: Extract<BookingChannel, "whatsapp" | "voice">;
-  externalReferencePrefix?: "meta" | "twilio" | "voice";
+  externalReferencePrefix?: "meta" | "assistant" | "voice";
   now?: Date;
 };
 
@@ -232,6 +233,32 @@ async function startBooking({
   });
 }
 
+async function cancelBooking({
+  supabase,
+  businessId,
+  phoneE164,
+  messageSid,
+  now
+}: {
+  supabase: SupabaseClient;
+  businessId: string;
+  phoneE164: string;
+  messageSid: string;
+  now: Date;
+}) {
+  return saveConversation({
+    supabase,
+    businessId,
+    phoneE164,
+    state: "idle",
+    context: {},
+    messageSid,
+    response:
+      "Prenotazione annullata. Quando vuoi ricominciare, scrivi PRENOTA.",
+    now
+  });
+}
+
 export async function handleBookingAssistantMessage({
   supabase,
   businessSlug,
@@ -240,7 +267,7 @@ export async function handleBookingAssistantMessage({
   body,
   messageSid,
   bookingChannel = "whatsapp",
-  externalReferencePrefix = "twilio",
+  externalReferencePrefix = "assistant",
   now = new Date()
 }: AssistantInput) {
   const { data: business, error: businessError } = await supabase
@@ -302,15 +329,11 @@ export async function handleBookingAssistantMessage({
   }
 
   if (normalizedBody === "annulla") {
-    return saveConversation({
+    return cancelBooking({
       supabase,
       businessId,
       phoneE164,
-      state: "idle",
-      context: {},
       messageSid,
-      response:
-        "Prenotazione annullata. Quando vuoi ricominciare, scrivi PRENOTA.",
       now
     });
   }
@@ -323,6 +346,21 @@ export async function handleBookingAssistantMessage({
     state === "idle" || !previous?.context ? {} : previous.context;
 
   if (state === "idle") {
+    const intent = await interpretBookingLanguage({
+      body,
+      state,
+      now
+    });
+    if (intent?.action === "start") {
+      return startBooking({
+        supabase,
+        businessId,
+        phoneE164,
+        messageSid,
+        now
+      });
+    }
+
     return saveConversation({
       supabase,
       businessId,
@@ -338,7 +376,28 @@ export async function handleBookingAssistantMessage({
 
   if (state === "awaiting_service") {
     const services = await getServices(supabase, businessId);
-    const service = resolveServiceChoice(body, services);
+    let service = resolveServiceChoice(body, services);
+    if (!service) {
+      const intent = await interpretBookingLanguage({
+        body,
+        state,
+        services,
+        now
+      });
+      if (intent?.action === "cancel") {
+        return cancelBooking({
+          supabase,
+          businessId,
+          phoneE164,
+          messageSid,
+          now
+        });
+      }
+      if (intent?.action === "service") {
+        service =
+          services.find((candidate) => candidate.slug === intent.value) ?? null;
+      }
+    }
     if (!service) {
       return saveConversation({
         supabase,
@@ -370,10 +429,28 @@ export async function handleBookingAssistantMessage({
   }
 
   if (state === "awaiting_date") {
-    let date: string;
+    let date: string | null = null;
     try {
       date = parseItalianBookingDate(body, now);
     } catch {
+      const intent = await interpretBookingLanguage({
+        body,
+        state,
+        now
+      });
+      if (intent?.action === "cancel") {
+        return cancelBooking({
+          supabase,
+          businessId,
+          phoneE164,
+          messageSid,
+          now
+        });
+      }
+      if (intent?.action === "date") date = intent.value;
+    }
+
+    if (!date) {
       return saveConversation({
         supabase,
         businessId,
@@ -448,7 +525,25 @@ export async function handleBookingAssistantMessage({
 
   if (state === "awaiting_slot") {
     const slots = context.availableSlots ?? [];
-    const startTime = resolveSlotChoice(body, slots);
+    let startTime = resolveSlotChoice(body, slots);
+    if (!startTime) {
+      const intent = await interpretBookingLanguage({
+        body,
+        state,
+        slots,
+        now
+      });
+      if (intent?.action === "cancel") {
+        return cancelBooking({
+          supabase,
+          businessId,
+          phoneE164,
+          messageSid,
+          now
+        });
+      }
+      if (intent?.action === "slot") startTime = intent.value;
+    }
     if (!startTime) {
       return saveConversation({
         supabase,
@@ -540,7 +635,20 @@ export async function handleBookingAssistantMessage({
   }
 
   if (state === "awaiting_confirmation") {
-    if (isNegative(body)) {
+    let affirmative = isAffirmative(body);
+    let negative = isNegative(body);
+    if (!affirmative && !negative) {
+      const intent = await interpretBookingLanguage({
+        body,
+        state,
+        now
+      });
+      affirmative = intent?.action === "affirmative";
+      negative =
+        intent?.action === "negative" || intent?.action === "cancel";
+    }
+
+    if (negative) {
       return saveConversation({
         supabase,
         businessId,
@@ -554,7 +662,7 @@ export async function handleBookingAssistantMessage({
       });
     }
 
-    if (!isAffirmative(body)) {
+    if (!affirmative) {
       return saveConversation({
         supabase,
         businessId,

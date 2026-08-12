@@ -23,6 +23,15 @@ import {
   UsersIcon
 } from "./icons";
 
+type AssistantStatus = {
+  bookingEngine: boolean;
+  languageAgent: boolean;
+  whatsapp: boolean;
+  browserVoice: boolean;
+  phoneVoice: boolean;
+  automations: boolean;
+};
+
 const longDate = new Intl.DateTimeFormat("it-IT", {
   weekday: "long",
   day: "numeric",
@@ -58,6 +67,8 @@ export function AdminDashboard() {
     Array<{ slot_time: string; duration_minutes: number }>
   >([]);
   const [manualLoading, setManualLoading] = useState(false);
+  const [assistantStatus, setAssistantStatus] =
+    useState<AssistantStatus | null>(null);
 
   const dayAppointments = appointments
     .filter(
@@ -110,6 +121,36 @@ export function AdminDashboard() {
   useEffect(() => {
     void loadAgenda(selectedDate);
   }, [selectedDate]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch("/api/admin/assistant/status", {
+      cache: "no-store",
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        if (response.status === 401) {
+          window.location.assign("/admin/login");
+          return null;
+        }
+        if (!response.ok) return null;
+        return (await response.json()) as AssistantStatus;
+      })
+      .then((status) => {
+        if (status) setAssistantStatus(status);
+      })
+      .catch((requestError: unknown) => {
+        if (
+          !(requestError instanceof DOMException) ||
+          requestError.name !== "AbortError"
+        ) {
+          console.warn("assistant_status_unavailable");
+        }
+      });
+
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     if (!manualOpen || !selectedCustomer) return;
@@ -326,8 +367,24 @@ export function AdminDashboard() {
             </article>
             <article className="assistant-card" id="assistente">
               <span>Segretario digitale</span>
-              <strong>Twilio attivo</strong>
-              <small><i /> WhatsApp collegato · voce pronta</small>
+              <strong>
+                {assistantStatus?.bookingEngine &&
+                assistantStatus.languageAgent
+                  ? "Motore AI attivo"
+                  : "Configurazione in corso"}
+              </strong>
+              <small>
+                <i />{" "}
+                {assistantStatus?.whatsapp
+                  ? "Meta collegato"
+                  : "Meta da collegare"}
+                {" · "}
+                {assistantStatus?.phoneVoice
+                  ? "telefono pronto"
+                  : assistantStatus?.browserVoice
+                    ? "test voce pronto"
+                    : "voce da configurare"}
+              </small>
             </article>
           </section>
 
